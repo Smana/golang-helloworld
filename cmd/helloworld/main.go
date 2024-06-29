@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,11 +13,7 @@ import (
 )
 
 func main() {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		log.Fatal("DATABASE_URL environment variable is required")
-	}
-
+	dbURL := getDatabaseURL()
 	db, err := server.NewDB(dbURL)
 	if err != nil {
 		log.Fatalf("Could not connect to the database: %v", err)
@@ -35,4 +32,30 @@ func main() {
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatalf("Could not start server: %s", err)
 	}
+}
+
+func getDatabaseURL() string {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL != "" {
+		return dbURL
+	}
+
+	// Construct the DATABASE_URL from individual components
+	pgHost := os.Getenv("PGHOST")
+	pgHostAddr := os.Getenv("PGHOSTADDR")
+	pgPort := os.Getenv("PGPORT")
+	pgDatabase := os.Getenv("PGDATABASE")
+	pgUser := os.Getenv("PGUSER")
+	pgPassword := os.Getenv("PGPASSWORD")
+
+	host := pgHost
+	if pgHostAddr != "" {
+		host = pgHostAddr
+	}
+
+	if host == "" || pgPort == "" || pgDatabase == "" || pgUser == "" {
+		log.Fatal("All database environment variables (PGHOST/PGHOSTADDR, PGPORT, PGDATABASE, PGUSER) are required if DATABASE_URL is not set")
+	}
+
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", pgUser, pgPassword, host, pgPort, pgDatabase)
 }
