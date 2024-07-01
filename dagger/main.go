@@ -3,34 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
 	"strconv"
 )
 
 const (
 	alpineImage = "alpine:3.20.1"
 	golangImage = "golang:1.22"
+	targetImage = "ttl.sh/golang-helloworld"
 )
 
 type GolangHelloworld struct{}
-
-// Build and publish Docker container
-func (m *GolangHelloworld) Build(ctx context.Context, source *Directory) (*Container, error) {
-	// build the binary
-	builder := dag.Container().
-		From(golangImage).
-		WithDirectory("/src", source).
-		WithWorkdir("/src").
-		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"go", "build", "-o", "helloworld", "cmd/helloworld/main.go"})
-
-	// publish binary on alpine base
-	targetImage := dag.Container().
-		From(alpineImage).
-		WithFile("/bin/helloworld", builder.File("/src/helloworld")).
-		WithEntrypoint([]string{"/bin/helloworld"})
-
-	return targetImage, nil
-}
 
 // Test runs go test on the provided source directory
 func (m *GolangHelloworld) Test(ctx context.Context, source *Directory) (string, error) {
@@ -40,6 +24,41 @@ func (m *GolangHelloworld) Test(ctx context.Context, source *Directory) (string,
 		WithMountedDirectory("/src", source).
 		WithExec([]string{"go", "test", "./..."}).
 		Stdout(ctx)
+}
+
+// Build and publish Docker container
+func (m *GolangHelloworld) Build(ctx context.Context, source *Directory) *Container {
+	// build the binary
+	builder := dag.Container().
+		From(golangImage).
+		WithDirectory("/src", source).
+		WithWorkdir("/src").
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithExec([]string{"go", "build", "-o", "helloworld", "cmd/helloworld/main.go"})
+
+	// Create the target image with the binary
+	targetImage := dag.Container().
+		From(alpineImage).
+		WithFile("/bin/helloworld", builder.File("/src/helloworld")).
+		WithEntrypoint([]string{"/bin/helloworld"})
+
+	return targetImage
+}
+
+// Publish the application container after building and testing it on-the-fly
+func (m *GolangHelloworld) Publish(ctx context.Context, source *Directory) (string, error) {
+	// call Dagger Function to run unit tests
+	_, err := m.Test(ctx, source)
+	if err != nil {
+		return "", err
+	}
+	// publish the image to ttl.sh
+	address, err := m.Build(ctx, source).
+		Publish(ctx, fmt.Sprintf("%s-%.0f", targetImage, math.Floor(rand.Float64()*10000000))) //#nosec
+	if err != nil {
+		return "", err
+	}
+	return address, nil
 }
 
 // Serve builds and start a server for the provided source directory and a postgres database
@@ -102,10 +121,7 @@ func (m *GolangHelloworld) Serve(
 		return nil, fmt.Errorf("could not get postgres hostname: %w", err)
 	}
 
-	ctr, err := m.Build(ctx, source)
-	if err != nil {
-		return nil, fmt.Errorf("could not build container: %w", err)
-	}
+	ctr := m.Build(ctx, source)
 
 	return ctr.
 		WithSecretVariable("PGPASSWORD", pgPass).
