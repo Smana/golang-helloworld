@@ -3,21 +3,27 @@ package main
 import (
 	"context"
 	"fmt"
+	"helloworld/dagger/internal/dagger"
 	"math"
 	"math/rand"
 	"strconv"
 )
 
 const (
-	alpineImage = "alpine:3.20.1"
-	golangImage = "golang:1.22"
+	alpineImage = "alpine:3.21.0"
+	golangImage = "golang:1.23"
 	targetImage = "ttl.sh/golang-helloworld"
 )
 
 type GolangHelloworld struct{}
 
 // Test runs go test on the provided source directory
-func (m *GolangHelloworld) Test(ctx context.Context, source *Directory) (string, error) {
+func (m *GolangHelloworld) Test(
+	ctx context.Context,
+	// The source directory of the application to mount into the container
+	// +defaultPath="."
+	source *dagger.Directory,
+) (string, error) {
 	ctr := dag.Container().From(golangImage)
 	return ctr.
 		WithWorkdir("/src").
@@ -26,8 +32,13 @@ func (m *GolangHelloworld) Test(ctx context.Context, source *Directory) (string,
 		Stdout(ctx)
 }
 
-// Build and publish Docker container
-func (m *GolangHelloworld) Build(ctx context.Context, source *Directory) *Container {
+// Build the OCI image for the application
+func (m *GolangHelloworld) Build(
+	ctx context.Context,
+	// The source directory of the application to mount into the container
+	// +defaultPath="."
+	source *dagger.Directory,
+) *dagger.Container {
 	// build the binary
 	builder := dag.Container().
 		From(golangImage).
@@ -46,7 +57,12 @@ func (m *GolangHelloworld) Build(ctx context.Context, source *Directory) *Contai
 }
 
 // Publish the application container after building and testing it on-the-fly
-func (m *GolangHelloworld) Publish(ctx context.Context, source *Directory) (string, error) {
+func (m *GolangHelloworld) Publish(
+	ctx context.Context,
+	// The source directory of the application to mount into the container
+	// +defaultPath="."
+	source *dagger.Directory,
+) (string, error) {
 	// call Dagger Function to run unit tests
 	_, err := m.Test(ctx, source)
 	if err != nil {
@@ -66,8 +82,8 @@ func (m *GolangHelloworld) Serve(
 	ctx context.Context,
 
 	// The source directory of the application
-	// +optional
-	source *Directory,
+	// +defaultPath="."
+	source *dagger.Directory,
 
 	// The database name to use (if not set "wordsdb" is used)
 	// +optional
@@ -75,10 +91,10 @@ func (m *GolangHelloworld) Serve(
 	dbName string,
 
 	// The postgres user secret
-	pgUser *Secret,
+	pgUser *dagger.Secret,
 
 	// The postgres password secret
-	pgPass *Secret,
+	pgPass *dagger.Secret,
 
 	// The pgPort to use (if not set "5432" is used)
 	// +optional
@@ -87,32 +103,35 @@ func (m *GolangHelloworld) Serve(
 
 	// The directory containing the init script for the postgres database
 	// +optional
-	initScriptDir *Directory,
+	initScriptDir *dagger.Directory,
 
 	// cache is a flag to enable caching of the postgres container
 	// +optional
 	// +default=false
 	cache bool,
 
-) (*Container, error) {
+) (*dagger.Container, error) {
 
 	if initScriptDir == nil {
 		initScriptDir = source.Directory("./scripts")
 	}
 
-	opts := PostgresOpts{
-		DbName:     dbName,
-		Cache:      cache,
-		Version:    "13",
-		ConfigFile: nil,
-		InitScript: initScriptDir,
-	}
 	// convert pgPort to int
 	pgPortInt, err := strconv.Atoi(pgPort)
 	if err != nil {
 		return nil, fmt.Errorf("could not convert pgPort to int: %w", err)
 	}
-	pgCtr := dag.Postgres(pgUser, pgPass, pgPortInt, opts).Database()
+
+	opts := dagger.PostgresOpts{
+		DbName:     dbName,
+		DbPort:     pgPortInt,
+		Cache:      cache,
+		Version:    "16",
+		ConfigFile: nil,
+		InitScript: initScriptDir,
+	}
+
+	pgCtr := dag.Postgres(pgUser, pgPass, opts).Database()
 
 	pgSvc := pgCtr.AsService()
 
