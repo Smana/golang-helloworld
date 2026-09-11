@@ -15,33 +15,24 @@ type Logger struct {
 	logger zerolog.Logger
 }
 
-// NewLogger creates a new logger with trace correlation
-func NewLogger(config Config) *Logger {
-	// Configure output
-	var output io.Writer = os.Stdout
+// NewLogger writes JSON (or console) logs to stdout.
+func NewLogger(config Config) *Logger { return NewLoggerTo(os.Stdout, config) }
+
+// NewLoggerTo writes to w; tests pass a buffer.
+func NewLoggerTo(w io.Writer, config Config) *Logger {
+	var output io.Writer = w
 	if config.LogFormat == "console" {
-		output = zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: time.RFC3339,
-		}
+		output = zerolog.ConsoleWriter{Out: w, TimeFormat: time.RFC3339}
 	}
-
-	// Parse log level
-	level := parseLogLevel(config.LogLevel)
-
-	// Create base logger
 	baseLogger := zerolog.New(output).
-		Level(level).
+		Level(parseLogLevel(config.LogLevel)).
 		With().
 		Timestamp().
-		Str("service", config.ServiceName).
-		Str("version", config.ServiceVersion).
-		Str("environment", config.Environment).
+		Str("service.name", config.ServiceName).
+		Str("service.version", config.ServiceVersion).
+		Str("deployment.environment.name", config.Environment).
 		Logger()
-
-	return &Logger{
-		logger: baseLogger,
-	}
+	return &Logger{logger: baseLogger}
 }
 
 // parseLogLevel converts string log level to zerolog.Level

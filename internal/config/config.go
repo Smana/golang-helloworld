@@ -74,6 +74,9 @@ type ServerConfig struct {
 type ObservabilityConfig struct {
 	ServiceName      string
 	ServiceVersion   string
+	Environment      string
+	PodName          string
+	PodNamespace     string
 	TracesEndpoint   string
 	TracesEnabled    bool
 	TracesSampler    string
@@ -110,8 +113,10 @@ func Load() (*Config, error) {
 	cacheIdleTimeout := parseDurationOrDefault(getEnv("CACHE_IDLE_TIMEOUT", "5m"), 5*time.Minute)
 	cacheDefaultTTL := parseDurationOrDefault(getEnv("CACHE_DEFAULT_TTL", "1h"), 1*time.Hour)
 
+	goEnv := getEnv("GO_ENV", "development")
+
 	config := &Config{
-		Environment: getEnv("GO_ENV", "development"),
+		Environment: goEnv,
 		Port:        getEnv("PORT", "8080"),
 		Host:        getEnv("HOST", "localhost"),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
@@ -158,6 +163,9 @@ func Load() (*Config, error) {
 		Observability: ObservabilityConfig{
 			ServiceName:      getEnv("OTEL_SERVICE_NAME", "image-gallery"),
 			ServiceVersion:   getEnv("OTEL_SERVICE_VERSION", "1.3.0"),
+			Environment:      getEnv("OTEL_DEPLOYMENT_ENVIRONMENT", goEnv),
+			PodName:          getEnv("POD_NAME", ""),
+			PodNamespace:     getEnv("POD_NAMESPACE", ""),
 			TracesEndpoint:   getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "localhost:4318"),
 			TracesEnabled:    parseBoolOrDefault(getEnv("OTEL_TRACES_ENABLED", "true"), true),
 			TracesSampler:    getEnv("OTEL_TRACES_SAMPLER", "always_on"),

@@ -26,7 +26,7 @@ import (
 func init() {
 	// Automatically set GOMEMLIMIT to 90% of cgroup's memory limit
 	// This helps prevent OOM kills in containerized environments
-	if _, err := memlimit.SetGoMemLimitWithOpts(
+	if _, err := memlimit.Set(
 		memlimit.WithRatio(0.9),
 		memlimit.WithProvider(memlimit.FromCgroup),
 		memlimit.WithLogger(slog.Default()),
@@ -49,7 +49,9 @@ func main() {
 	otelConfig := observability.Config{
 		ServiceName:      cfg.Observability.ServiceName,
 		ServiceVersion:   cfg.Observability.ServiceVersion,
-		Environment:      cfg.Environment,
+		Environment:      cfg.Observability.Environment,
+		PodName:          cfg.Observability.PodName,
+		PodNamespace:     cfg.Observability.PodNamespace,
 		TracesEndpoint:   cfg.Observability.TracesEndpoint,
 		TracesEnabled:    cfg.Observability.TracesEnabled,
 		TracesSampler:    cfg.Observability.TracesSampler,
