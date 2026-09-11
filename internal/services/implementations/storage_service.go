@@ -99,6 +99,7 @@ func (s *StorageServiceImpl) Store(ctx context.Context, filename string, content
 	} else {
 		// Fallback to MinIOClient if service not available
 		path = "images/" + filename
+		err = s.client.UploadFile(ctx, path, data, size, contentType)
 	}
 
 	// Record metrics
@@ -144,8 +145,21 @@ func (s *StorageServiceImpl) Retrieve(ctx context.Context, path string) (io.Read
 	if s.service != nil {
 		obj, err = s.service.Retrieve(ctx, path)
 	} else {
-		// Fallback to MinIOClient
-		obj, err = s.client.GetFile(ctx, path)
+		// Fallback to MinIOClient. GetFile/GetObject is lazy and does not
+		// contact the server, so it never errors on a missing key - only
+		// Stat (or Read) does. Stat eagerly here so a missing object is
+		// reported as an error from Retrieve instead of surfacing later
+		// on the first Read of the returned reader.
+		var minioObj *minio.Object
+		minioObj, err = s.client.GetFile(ctx, path)
+		if err == nil {
+			if _, statErr := minioObj.Stat(); statErr != nil {
+				_ = minioObj.Close() //nolint:errcheck // Cleanup operation in error path
+				err = statErr
+			} else {
+				obj = minioObj
+			}
+		}
 	}
 
 	// Record metrics
@@ -220,9 +234,19 @@ func (s *StorageServiceImpl) Exists(ctx context.Context, path string) (bool, err
 	if s.service != nil {
 		return s.service.Exists(ctx, path)
 	}
-	// Check if file exists using MinIOClient
-	_, err := s.client.GetFile(ctx, path)
+	// Check if file exists using MinIOClient. GetFile/GetObject is lazy and
+	// does not contact the server, so Stat is required to actually verify
+	// the object is present.
+	obj, err := s.client.GetFile(ctx, path)
 	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return false, nil
+		}
+		return false, err
+	}
+	defer func() { _ = obj.Close() }() //nolint:errcheck // Cleanup operation, error not actionable
+
+	if _, err := obj.Stat(); err != nil {
 		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
 			return false, nil
 		}
