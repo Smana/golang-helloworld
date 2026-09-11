@@ -81,15 +81,8 @@ func NewWithContainer(container *services.Container) *Handler {
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 
-	// Add OpenTelemetry tracing middleware first (for all requests)
-	if h.tracer != nil {
-		r.Use(observability.TracingMiddleware(h.tracer))
-	}
-
-	// Add OpenTelemetry metrics middleware
-	if h.httpMetrics != nil {
-		r.Use(observability.MetricsMiddleware(h.httpMetrics))
-	}
+	// One middleware: trace continuation, route-pattern span names, semconv RED metrics.
+	r.Use(observability.Middleware(h.tracer, h.httpMetrics))
 
 	// Standard Chi middleware
 	r.Use(middleware.Recoverer)

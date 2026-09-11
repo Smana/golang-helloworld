@@ -61,7 +61,7 @@ func (h *Handler) uploadImagesHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Start tracing span
-	ctx, span := h.tracer.Start(ctx, "UploadImages", trace.WithSpanKind(trace.SpanKindServer))
+	ctx, span := h.tracer.Start(ctx, "UploadImages")
 	defer span.End()
 
 	// Log upload initiation
