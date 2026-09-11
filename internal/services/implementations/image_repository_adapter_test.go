@@ -117,6 +117,11 @@ func (m *MockDatabaseImageRepository) GetStats(ctx context.Context) (*database.I
 	return args.Get(0).(*database.ImageStats), args.Error(1)
 }
 
+func (m *MockDatabaseImageRepository) GetContentTypeCounts(ctx context.Context) (map[string]int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(map[string]int64), args.Error(1)
+}
+
 func (m *MockDatabaseImageRepository) GetWithTags(ctx context.Context, pagination database.PaginationParams, sort database.SortParams) ([]*database.Image, error) {
 	args := m.Called(ctx, pagination, sort)
 	return args.Get(0).([]*database.Image), args.Error(1)

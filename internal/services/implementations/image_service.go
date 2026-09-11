@@ -592,9 +592,9 @@ func (s *ImageServiceImpl) GenerateImageURL(ctx context.Context, id int, expiry 
 
 // GetImageStats returns statistics about images
 func (s *ImageServiceImpl) GetImageStats(ctx context.Context) (*image.ImageStats, error) {
-	// TODO: Implement stats calculation
-	return &image.ImageStats{
-		TotalImages: 0,
-		TotalSize:   0,
-	}, nil
+	stats, err := s.imageRepo.GetStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image stats: %w", err)
+	}
+	return stats, nil
 }

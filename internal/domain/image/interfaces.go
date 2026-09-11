@@ -30,6 +30,9 @@ type Repository interface {
 
 	// CountByTag returns the number of images with a specific tag
 	CountByTag(ctx context.Context, tagName string) (int, error)
+
+	// GetStats returns aggregate statistics about all images
+	GetStats(ctx context.Context) (*ImageStats, error)
 }
 
 // TagRepository defines the interface for tag data persistence

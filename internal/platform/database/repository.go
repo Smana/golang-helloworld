@@ -30,6 +30,7 @@ type ImageRepository interface {
 	Count(ctx context.Context) (int, error)
 	CountByContentType(ctx context.Context, contentType string) (int, error)
 	GetStats(ctx context.Context) (*ImageStats, error)
+	GetContentTypeCounts(ctx context.Context) (map[string]int64, error)
 
 	// Tag relationships
 	GetWithTags(ctx context.Context, pagination PaginationParams, sort SortParams) ([]*Image, error)

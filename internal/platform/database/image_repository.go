@@ -411,6 +411,29 @@ func (r *imageRepository) GetStats(ctx context.Context) (*ImageStats, error) {
 	return stats, err
 }
 
+// GetContentTypeCounts returns the number of images grouped by content type
+func (r *imageRepository) GetContentTypeCounts(ctx context.Context) (map[string]int64, error) {
+	query := `SELECT content_type, COUNT(*) FROM images GROUP BY content_type`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // Read-only cleanup
+
+	counts := make(map[string]int64)
+	for rows.Next() {
+		var contentType string
+		var count int64
+		if err := rows.Scan(&contentType, &count); err != nil {
+			return nil, err
+		}
+		counts[contentType] = count
+	}
+
+	return counts, rows.Err()
+}
+
 // selectGetImagesOnlyQuery selects the appropriate query for images WITHOUT tags
 // This is more efficient than the old json_agg approach
 func (r *imageRepository) selectGetImagesOnlyQuery(sort SortParams) string {

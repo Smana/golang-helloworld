@@ -80,11 +80,17 @@ func (a *ImageRepositoryAdapter) GetByID(ctx context.Context, id int) (*image.Im
 		return nil, err
 	}
 
-	// Load tags for this image
-	// Note: We need access to tag repository, but adapter only has image repo
-	// For now, we'll load tags if the database image repository supports it
-	// TODO: This is a design issue - the adapter should have access to both repos
-	// or we should use a different approach
+	// Load tags for this image, if a tag repository has been wired in
+	if a.tagRepo != nil {
+		tags, err := a.tagRepo.GetImageTags(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tags for image %d: %w", id, err)
+		}
+		dbImage.Tags = make([]database.Tag, len(tags))
+		for i, tag := range tags {
+			dbImage.Tags[i] = *tag
+		}
+	}
 
 	return a.convertToBaseImage(dbImage), nil
 }
@@ -226,6 +232,25 @@ func (a *ImageRepositoryAdapter) ExistsByFilename(ctx context.Context, filename 
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *ImageRepositoryAdapter) GetStats(ctx context.Context) (*image.ImageStats, error) {
+	dbStats, err := a.dbRepo.GetStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image stats: %w", err)
+	}
+
+	contentTypeCounts, err := a.dbRepo.GetContentTypeCounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get content type counts: %w", err)
+	}
+
+	return &image.ImageStats{
+		TotalImages:  int64(dbStats.TotalImages),
+		TotalSize:    dbStats.TotalSize,
+		AverageSize:  int64(dbStats.AverageSize),
+		ContentTypes: contentTypeCounts,
+	}, nil
 }
 
 func (a *ImageRepositoryAdapter) CountByTag(ctx context.Context, tagName string) (int, error) {
