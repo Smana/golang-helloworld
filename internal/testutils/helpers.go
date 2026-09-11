@@ -308,8 +308,11 @@ func secureRandInt63n(n int64) int64 {
 		// Fallback to timestamp-based value for tests
 		return time.Now().UnixNano() % n
 	}
+	// Reduce modulo n in unsigned space before converting to int64: converting
+	// a random uint64 to int64 first can produce a negative value, and Go's `%`
+	// preserves the dividend's sign, so the result would fall outside [0, n).
 	// #nosec G115 -- Test utility function, overflow acceptable for test randomness
-	return int64(binary.BigEndian.Uint64(buf[:])) % n
+	return int64(binary.BigEndian.Uint64(buf[:]) % uint64(n))
 }
 
 // secureRandIntn generates a secure random int in range [0, n)
