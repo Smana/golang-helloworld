@@ -24,6 +24,7 @@ type Config struct {
 
 // StorageConfig holds object storage configuration
 type StorageConfig struct {
+	Provider        string // STORAGE_PROVIDER: "s3" (default) or "gcs"
 	Endpoint        string
 	AccessKeyID     string
 	SecretAccessKey string
@@ -121,6 +122,7 @@ func Load() (*Config, error) {
 		Host:        getEnv("HOST", "localhost"),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
 		Storage: StorageConfig{
+			Provider:        getEnv("STORAGE_PROVIDER", "s3"),
 			Endpoint:        getEnv("STORAGE_ENDPOINT", "localhost:9000"),
 			AccessKeyID:     getEnv("STORAGE_ACCESS_KEY", ""),
 			SecretAccessKey: getEnv("STORAGE_SECRET_KEY", ""),

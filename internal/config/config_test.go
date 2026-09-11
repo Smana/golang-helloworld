@@ -136,3 +136,54 @@ func TestLoad(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadStorageProvider(t *testing.T) {
+	tests := []struct {
+		name          string
+		envVars       map[string]string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "gcs provider with bucket loads and validates",
+			envVars: map[string]string{
+				"GO_ENV":           "test",
+				"STORAGE_PROVIDER": "gcs",
+				"STORAGE_BUCKET":   "b",
+			},
+			expectError: false,
+		},
+		{
+			name: "unknown provider fails validation",
+			envVars: map[string]string{
+				"GO_ENV":           "test",
+				"STORAGE_PROVIDER": "azure",
+			},
+			expectError:   true,
+			errorContains: "STORAGE_PROVIDER",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for key, value := range tt.envVars {
+				_ = os.Setenv(key, value)
+			}
+			defer func() {
+				for key := range tt.envVars {
+					_ = os.Unsetenv(key)
+				}
+			}()
+
+			config, err := Load()
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, config)
+			assert.Equal(t, tt.envVars["STORAGE_PROVIDER"], config.Storage.Provider)
+		})
+	}
+}

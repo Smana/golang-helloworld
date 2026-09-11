@@ -13,6 +13,7 @@ import (
 // Constants for repeated string literals
 const (
 	minioadminCredential = "minioadmin"
+	storageProviderGCS   = "gcs"
 )
 
 // ValidationError represents a configuration validation error
@@ -196,8 +197,20 @@ func (c *Config) validateDatabase() ValidationErrors {
 func (c *Config) validateStorage() ValidationErrors {
 	var errors ValidationErrors
 
-	// Validate endpoint
-	if c.Storage.Endpoint == "" {
+	// Validate provider
+	switch c.Storage.Provider {
+	case "", "s3", storageProviderGCS:
+		// valid
+	default:
+		errors = append(errors, ValidationError{
+			Field:   "storage.provider",
+			Value:   c.Storage.Provider,
+			Message: fmt.Sprintf("STORAGE_PROVIDER must be \"s3\" or \"gcs\" (got %q)", c.Storage.Provider),
+		})
+	}
+
+	// Validate endpoint - not required for gcs, which uses Application Default Credentials
+	if c.Storage.Provider != storageProviderGCS && c.Storage.Endpoint == "" {
 		errors = append(errors, ValidationError{
 			Field:   "storage.endpoint",
 			Value:   c.Storage.Endpoint,
@@ -205,14 +218,15 @@ func (c *Config) validateStorage() ValidationErrors {
 		})
 	}
 
-	// Validate bucket name
+	// Validate bucket name: presence is required for both providers, but the
+	// S3 naming format (3-63 chars) does not apply to GCS bucket names.
 	if c.Storage.BucketName == "" {
 		errors = append(errors, ValidationError{
 			Field:   "storage.bucket_name",
 			Value:   c.Storage.BucketName,
 			Message: "storage bucket name cannot be empty",
 		})
-	} else if !isValidBucketName(c.Storage.BucketName) {
+	} else if c.Storage.Provider != storageProviderGCS && !isValidBucketName(c.Storage.BucketName) {
 		errors = append(errors, ValidationError{
 			Field:   "storage.bucket_name",
 			Value:   c.Storage.BucketName,
