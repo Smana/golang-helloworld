@@ -80,8 +80,8 @@ type StorageService interface {
 	// Exists checks if a file exists in storage
 	Exists(ctx context.Context, path string) (bool, error)
 
-	// GenerateURL creates a temporary or permanent URL for file access
-	GenerateURL(ctx context.Context, path string, expiry int64) (string, error)
+	// StoreAt saves data under an exact path (used for derived objects such as thumbnails).
+	StoreAt(ctx context.Context, path string, contentType string, data io.Reader, size int64) error
 
 	// GetFileInfo returns metadata about a stored file
 	GetFileInfo(ctx context.Context, path string) (*FileInfo, error)
@@ -158,9 +158,6 @@ type ImageService interface {
 
 	// DownloadImage provides access to the original image file
 	DownloadImage(ctx context.Context, id int) (io.ReadCloser, string, error)
-
-	// GenerateImageURL creates a URL for accessing an image
-	GenerateImageURL(ctx context.Context, id int, expiry int64) (string, error)
 
 	// GetImageStats returns statistics about images
 	GetImageStats(ctx context.Context) (*ImageStats, error)

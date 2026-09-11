@@ -12,7 +12,6 @@ import (
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
 	"image-gallery/internal/observability"
-	"image-gallery/internal/platform/storage"
 	"image-gallery/internal/services"
 
 	"github.com/go-chi/chi/v5"
@@ -22,9 +21,8 @@ import (
 
 type Handler struct {
 	// Legacy fields for backward compatibility
-	db      *sql.DB
-	storage *storage.MinIOClient
-	config  *config.Config
+	db     *sql.DB
+	config *config.Config
 
 	// New service-based dependencies
 	container      *services.Container
@@ -36,15 +34,6 @@ type Handler struct {
 	tracer      trace.Tracer
 	httpMetrics *observability.HTTPMetrics
 	logger      *observability.Logger
-}
-
-// New creates a handler with legacy dependencies (for backward compatibility)
-func New(db *sql.DB, storage *storage.MinIOClient, config *config.Config) *Handler {
-	return &Handler{
-		db:      db,
-		storage: storage,
-		config:  config,
-	}
 }
 
 // NewWithContainer creates a handler with the dependency injection container
@@ -61,9 +50,8 @@ func NewWithContainer(container *services.Container) *Handler {
 
 	return &Handler{
 		// Legacy fields for backward compatibility
-		db:      container.DB(),
-		storage: container.StorageClient(),
-		config:  container.Config(),
+		db:     container.DB(),
+		config: container.Config(),
 
 		// New service-based dependencies
 		container:      container,

@@ -470,13 +470,8 @@ func (h *Handler) getImageHandler(w http.ResponseWriter, r *http.Request) {
 
 	h.setSpanAttributes(span, attribute.Bool("image.found", true))
 
-	// Generate presigned URL
-	url, err := h.storageService.GenerateURL(ctx, imagePath, 3600)
-	if err != nil {
-		h.handleError(ctx, span, err, "Failed to generate image URL", "failed to generate URL", imagePath)
-		http.Error(w, "Failed to generate image URL", http.StatusInternalServerError)
-		return
-	}
+	// Serve the image through the app's own proxy endpoint (no presigned URLs).
+	viewURL := fmt.Sprintf("/api/images/%s/view", imagePath)
 
 	// Get image metadata
 	fileInfo, err := h.storageService.GetFileInfo(ctx, imagePath)
@@ -496,7 +491,7 @@ func (h *Handler) getImageHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(ImageResponse{
 		ID:         imagePath,
-		URL:        url,
+		URL:        viewURL,
 		Size:       fileInfo.Size,
 		UploadTime: time.Unix(fileInfo.LastModified, 0).Format("2006-01-02 15:04:05"),
 	}); err != nil {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 
 	"image-gallery/internal/config"
@@ -25,7 +26,7 @@ type Container struct {
 	db     *sql.DB
 
 	// Storage
-	storageClient  *storage.MinIOClient
+	objectStore    storage.ObjectStore
 	storageService image.StorageService
 
 	// Repositories
@@ -53,12 +54,12 @@ type Container struct {
 }
 
 // NewContainer creates a new dependency injection container
-func NewContainer(cfg *config.Config, db *sql.DB, storageClient *storage.MinIOClient) (*Container, error) {
+func NewContainer(cfg *config.Config, db *sql.DB, store storage.ObjectStore) (*Container, error) {
 	container := &Container{
-		config:        cfg,
-		db:            db,
-		storageClient: storageClient,
-		logger:        nil, // No logger in legacy constructor
+		config:      cfg,
+		db:          db,
+		objectStore: store,
+		logger:      nil, // No logger in legacy constructor
 	}
 
 	if err := container.initializeServices(); err != nil {
@@ -69,12 +70,12 @@ func NewContainer(cfg *config.Config, db *sql.DB, storageClient *storage.MinIOCl
 }
 
 // NewContainerWithObservability creates a new dependency injection container with observability support
-func NewContainerWithObservability(cfg *config.Config, db *sql.DB, storageClient *storage.MinIOClient, logger *observability.Logger) (*Container, error) {
+func NewContainerWithObservability(cfg *config.Config, db *sql.DB, store storage.ObjectStore, logger *observability.Logger) (*Container, error) {
 	container := &Container{
-		config:        cfg,
-		db:            db,
-		storageClient: storageClient,
-		logger:        logger,
+		config:      cfg,
+		db:          db,
+		objectStore: store,
+		logger:      logger,
 	}
 
 	if err := container.initializeServices(); err != nil {
@@ -85,7 +86,7 @@ func NewContainerWithObservability(cfg *config.Config, db *sql.DB, storageClient
 }
 
 // NewContainerForTest creates a new dependency injection container for testing
-func NewContainerForTest(testCfg *TestConfig, db *sql.DB, storageClient *storage.MinIOClient) (*Container, error) {
+func NewContainerForTest(testCfg *TestConfig, db *sql.DB, store storage.ObjectStore) (*Container, error) {
 	// Create a minimal config for testing
 	cfg := &config.Config{
 		Environment: "test",
@@ -95,7 +96,7 @@ func NewContainerForTest(testCfg *TestConfig, db *sql.DB, storageClient *storage
 		},
 	}
 
-	return NewContainer(cfg, db, storageClient)
+	return NewContainer(cfg, db, store)
 }
 
 // initializeServices initializes all services in the correct dependency order
@@ -115,13 +116,11 @@ func (c *Container) initializeServices() error {
 	c.settingsRepository = implementations.NewSettingsRepository(c.db)
 
 	// Initialize infrastructure services
-	// Try to create full storage service, fallback to MinIOClient wrapper
-	storageConfig := &c.config.Storage
-	if fullStorageService, err := storage.NewService(storageConfig); err == nil {
-		c.storageService = implementations.NewStorageServiceWithService(fullStorageService)
-	} else {
-		c.storageService = implementations.NewStorageService(c.storageClient)
+	svc, err := storage.NewService(&c.config.Storage, c.objectStore)
+	if err != nil {
+		return fmt.Errorf("storage service: %w", err)
 	}
+	c.storageService = implementations.NewStorageService(svc)
 	c.imageProcessor = implementations.NewImageProcessor()
 	c.validationService = implementations.NewValidationService()
 
@@ -184,8 +183,8 @@ func (c *Container) DB() *sql.DB {
 	return c.db
 }
 
-func (c *Container) StorageClient() *storage.MinIOClient {
-	return c.storageClient
+func (c *Container) ObjectStore() storage.ObjectStore {
+	return c.objectStore
 }
 
 func (c *Container) StorageService() image.StorageService {

@@ -131,12 +131,26 @@ func (ts *TestSuite) CreateTestImageWithTags(ctx context.Context, filename strin
 	return img, tags, nil
 }
 
-// GenerateTestImageData creates mock image data for testing
-func GenerateTestImageData(width, height int) []byte {
-	// Create a simple test image (just some bytes that represent an image)
-	// In a real test, you might want to generate actual image data
+// imageMagicNumbers are the header bytes storage.Service's content-type
+// sniffing checks for; keep in step with the patterns it validates against.
+var imageMagicNumbers = map[string][]byte{
+	"image/jpeg": {0xFF, 0xD8, 0xFF},
+	"image/jpg":  {0xFF, 0xD8, 0xFF},
+	"image/png":  {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
+	"image/gif":  {0x47, 0x49, 0x46, 0x38, 0x39, 0x61},
+}
+
+// GenerateTestImageData creates mock image data for testing. The leading
+// bytes are overwritten with contentType's magic number, so the real
+// storage.Service upload path (which sniffs content against the declared
+// type) accepts it; the remaining bytes stay random.
+func GenerateTestImageData(width, height int, contentType string) []byte {
 	size := width * height * 3 // RGB
-	return secureRandBytes(size)
+	data := secureRandBytes(size)
+	if magic := imageMagicNumbers[contentType]; len(magic) > 0 && len(data) >= len(magic) {
+		copy(data, magic)
+	}
+	return data
 }
 
 // CreateMultipartFormData creates multipart form data for file upload testing

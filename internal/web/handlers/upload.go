@@ -310,16 +310,8 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 		}
 	}
 
-	// Generate presigned URL for immediate access
-	var imageURL string
-	if h.storageService != nil {
-		url, err := h.storageService.GenerateURL(ctx, img.StoragePath, 3600) // 1 hour expiry
-		if err != nil {
-			h.logger.Warn(ctx).Err(err).Int("image_id", img.ID).Msg("Failed to generate image URL")
-		} else {
-			imageURL = url
-		}
-	}
+	// Serve the image through the app's own proxy endpoint (no presigned URLs).
+	imageURL := fmt.Sprintf("/api/images/%d/view", img.ID)
 
 	// Extract tag names
 	tagNames := make([]string, 0, len(img.Tags))

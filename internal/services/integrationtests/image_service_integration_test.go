@@ -39,7 +39,7 @@ func (s *ImageServiceIntegrationTestSuite) SetupSuite() {
 	// Create services container with test database
 	container, err := services.NewContainerForTest(&services.TestConfig{
 		DatabaseURL: testSuite.Containers.GetDatabaseURL(),
-	}, testSuite.Containers.DB, testSuite.Containers.MinioClient)
+	}, testSuite.Containers.DB, testSuite.Containers.ObjectStore)
 	require.NoError(s.T(), err, "Failed to create services container")
 	s.container = container
 	s.imageService = container.ImageService()
@@ -62,16 +62,18 @@ func (s *ImageServiceIntegrationTestSuite) SetupTest() {
 // TestCreateImage_Success tests successful image creation using TDD approach
 func (s *ImageServiceIntegrationTestSuite) TestCreateImage_Success() {
 	// Given: A valid image creation request
+	imageData := testutils.GenerateTestImageData(800, 600, "image/jpeg")
+
 	req := &image.CreateImageRequest{
 		OriginalFilename: "test-image.jpg",
 		ContentType:      "image/jpeg",
-		FileSize:         1024 * 50, // 50KB
-		Width:            &[]int{800}[0],
-		Height:           &[]int{600}[0],
-		Tags:             []string{"nature", "landscape"},
+		// FileSize must be the real length of the uploaded bytes: the storage
+		// service streams exactly FileSize bytes to the object store.
+		FileSize: int64(len(imageData)),
+		Width:    &[]int{800}[0],
+		Height:   &[]int{600}[0],
+		Tags:     []string{"nature", "landscape"},
 	}
-
-	imageData := testutils.GenerateTestImageData(800, 600)
 
 	// When: Creating an image
 	createdImage, err := s.imageService.CreateImage(s.ctx, req, strings.NewReader(string(imageData)))
@@ -105,7 +107,7 @@ func (s *ImageServiceIntegrationTestSuite) TestCreateImage_ValidationFailure() {
 		FileSize:         1024,
 	}
 
-	imageData := testutils.GenerateTestImageData(100, 100)
+	imageData := testutils.GenerateTestImageData(100, 100, req.ContentType)
 
 	// When: Attempting to create an image
 	createdImage, err := s.imageService.CreateImage(s.ctx, req, strings.NewReader(string(imageData)))
@@ -194,14 +196,14 @@ func (s *ImageServiceIntegrationTestSuite) TestDeleteImage_Success() {
 // TestImageWithTags_Integration tests full image lifecycle with tags
 func (s *ImageServiceIntegrationTestSuite) TestImageWithTags_Integration() {
 	// Given: Image creation request with tags
+	imageData := testutils.GenerateTestImageData(400, 300, "image/jpeg")
+
 	req := &image.CreateImageRequest{
 		OriginalFilename: "tagged-image.jpg",
 		ContentType:      "image/jpeg",
-		FileSize:         2048,
+		FileSize:         int64(len(imageData)),
 		Tags:             []string{"integration", "test", "lifecycle"},
 	}
-
-	imageData := testutils.GenerateTestImageData(400, 300)
 
 	// When: Creating image with tags
 	createdImage, err := s.imageService.CreateImage(s.ctx, req, strings.NewReader(string(imageData)))
@@ -240,26 +242,31 @@ func (s *ImageServiceIntegrationTestSuite) TestImageWithTags_Integration() {
 
 // TestImageStats_Integration tests image statistics functionality
 func (s *ImageServiceIntegrationTestSuite) TestImageStats_Integration() {
-	// Given: Multiple images with different properties
+	// Given: Multiple images of different sizes and content types. The
+	// dimensions drive the payload length, and FileSize must be the real
+	// length of those bytes: the storage service streams exactly FileSize
+	// bytes to the object store.
 	images := []struct {
-		filename    string
-		contentType string
-		size        int64
-		tags        []string
+		filename      string
+		contentType   string
+		width, height int
+		tags          []string
 	}{
-		{"jpg-image.jpg", "image/jpeg", 1024, []string{"jpg", "small"}},
-		{"png-image.png", "image/png", 2048, []string{"png", "medium"}},
-		{"large-jpg.jpg", "image/jpeg", 5120, []string{"jpg", "large"}},
+		{"jpg-image.jpg", "image/jpeg", 40, 40, []string{"jpg", "small"}},
+		{"png-image.png", "image/png", 60, 50, []string{"png", "medium"}},
+		{"large-jpg.jpg", "image/jpeg", 100, 80, []string{"jpg", "large"}},
 	}
 
+	var expectedTotalSize int64
 	for _, img := range images {
+		imageData := testutils.GenerateTestImageData(img.width, img.height, img.contentType)
 		req := &image.CreateImageRequest{
 			OriginalFilename: img.filename,
 			ContentType:      img.contentType,
-			FileSize:         img.size,
+			FileSize:         int64(len(imageData)),
 			Tags:             img.tags,
 		}
-		imageData := testutils.GenerateTestImageData(100, 100)
+		expectedTotalSize += req.FileSize
 		_, err := s.imageService.CreateImage(s.ctx, req, strings.NewReader(string(imageData)))
 		require.NoError(s.T(), err, "Failed to create test image %s", img.filename)
 	}
@@ -271,7 +278,7 @@ func (s *ImageServiceIntegrationTestSuite) TestImageStats_Integration() {
 	require.NoError(s.T(), err, "Getting image stats should not fail")
 	assert.NotNil(s.T(), stats, "Stats should not be nil")
 	assert.Equal(s.T(), int64(3), stats.TotalImages, "Should have 3 total images")
-	assert.Equal(s.T(), int64(1024+2048+5120), stats.TotalSize, "Total size should be sum of all images")
+	assert.Equal(s.T(), expectedTotalSize, stats.TotalSize, "Total size should be sum of all images")
 
 	// Verify content type distribution
 	assert.Contains(s.T(), stats.ContentTypes, "image/jpeg")
@@ -296,13 +303,13 @@ func BenchmarkImageService_CreateImage(b *testing.B) {
 
 	container, err := services.NewContainerForTest(&services.TestConfig{
 		DatabaseURL: testSuite.Containers.GetDatabaseURL(),
-	}, testSuite.Containers.DB, testSuite.Containers.MinioClient)
+	}, testSuite.Containers.DB, testSuite.Containers.ObjectStore)
 	if err != nil {
 		b.Fatalf("Failed to create services container: %v", err)
 	}
 
 	imageService := container.ImageService()
-	imageData := testutils.GenerateTestImageData(800, 600)
+	imageData := testutils.GenerateTestImageData(800, 600, "image/jpeg")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

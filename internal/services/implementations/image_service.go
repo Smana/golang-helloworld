@@ -584,12 +584,6 @@ func (s *ImageServiceImpl) DownloadImage(ctx context.Context, id int) (io.ReadCl
 	return nil, "", nil
 }
 
-// GenerateImageURL creates a URL for accessing an image
-func (s *ImageServiceImpl) GenerateImageURL(ctx context.Context, id int, expiry int64) (string, error) {
-	// TODO: Implement URL generation workflow
-	return "", nil
-}
-
 // GetImageStats returns statistics about images
 func (s *ImageServiceImpl) GetImageStats(ctx context.Context) (*image.ImageStats, error) {
 	stats, err := s.imageRepo.GetStats(ctx)

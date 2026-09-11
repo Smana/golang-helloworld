@@ -30,7 +30,7 @@ type TestContainers struct {
 	MinioContainer    testcontainers.Container
 	RedisContainer    testcontainers.Container
 	DB                *sql.DB
-	MinioClient       *storage.MinIOClient
+	ObjectStore       storage.ObjectStore
 	RedisClient       *cache.RedisClient
 	DatabaseURL       string
 	MinioEndpoint     string
@@ -194,14 +194,15 @@ func (tc *TestContainers) setupMinio(ctx context.Context) error {
 		UseSSL:          false,
 		BucketName:      "test-images",
 		Region:          "us-east-1",
+		Provider:        storage.ProviderS3,
 	}
 
-	storageClient, err := storage.NewMinIOClient(storageConfig)
+	objectStore, err := storage.NewS3Store(ctx, storageConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create storage client: %w", err)
 	}
 
-	tc.MinioClient = storageClient
+	tc.ObjectStore = objectStore
 
 	// Create test bucket
 	bucketName := "test-images"

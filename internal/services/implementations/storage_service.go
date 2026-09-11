@@ -5,337 +5,157 @@ import (
 	"io"
 	"time"
 
-	"image-gallery/internal/domain/image"
-	"image-gallery/internal/platform/storage"
-
-	"github.com/minio/minio-go/v7"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"image-gallery/internal/domain/image"
+	obs "image-gallery/internal/observability"
+	"image-gallery/internal/platform/storage"
 )
 
-// StorageServiceImpl implements the image.StorageService interface
+// StorageServiceImpl is the single instrumentation point for object storage:
+// both backends emit the same storage.* spans and metrics, told apart by
+// storage.provider.
 type StorageServiceImpl struct {
-	client  *storage.MinIOClient
-	service *storage.Service
-
-	// Observability
-	tracer                    trace.Tracer
-	storageOperationsCounter  metric.Int64Counter
-	storageOperationsDuration metric.Float64Histogram
-	storageBytesTransferred   metric.Int64Counter
+	service     *storage.Service
+	provider    string
+	tracer      trace.Tracer
+	ops         metric.Int64Counter
+	duration    metric.Float64Histogram
+	transferred metric.Int64Counter
 }
 
-// NewStorageService creates a new storage service implementation
-func NewStorageService(client *storage.MinIOClient) image.StorageService {
-	return initStorageService(&StorageServiceImpl{
-		client: client,
-	})
+// NewStorageService instruments svc.
+//
+//nolint:errcheck // instrument names are constants; the SDK returns a usable instrument alongside any error
+func NewStorageService(svc *storage.Service) image.StorageService {
+	meter := otel.Meter("image-gallery/storage")
+	ops, _ := meter.Int64Counter(obs.MetricStorageOps, metric.WithUnit("{operation}"), metric.WithDescription("Object storage operations"))
+	duration, _ := meter.Float64Histogram(obs.MetricStorageDuration, metric.WithUnit("s"), metric.WithDescription("Object storage operation duration"))
+	transferred, _ := meter.Int64Counter(obs.MetricStorageTransferred, metric.WithUnit("By"), metric.WithDescription("Bytes written to and read from object storage"))
+	return &StorageServiceImpl{service: svc, provider: svc.Provider(), tracer: otel.Tracer("image-gallery/storage"),
+		ops: ops, duration: duration, transferred: transferred}
 }
 
-// NewStorageServiceWithService creates a new storage service with the full Service implementation
-func NewStorageServiceWithService(service *storage.Service) image.StorageService {
-	return initStorageService(&StorageServiceImpl{
-		service: service,
-	})
+// observe starts a CLIENT span storage.<op> and returns the span context plus
+// its finisher, which records the span status and the operation metrics.
+func (s *StorageServiceImpl) observe(ctx context.Context, op, key string) (spanCtx context.Context, done func(error)) {
+	start := time.Now()
+	ctx, span := s.tracer.Start(ctx, "storage."+op, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(
+		attribute.String(obs.AttrStorageProvider, s.provider), attribute.String(obs.AttrStorageKey, key)))
+	return ctx, func(err error) {
+		outcome := obs.OutcomeSuccess
+		if err != nil {
+			outcome = obs.OutcomeError
+			span.RecordError(err)
+			span.SetStatus(codes.Error, op+" failed")
+		}
+		attrs := metric.WithAttributes(attribute.String(obs.AttrStorageProvider, s.provider),
+			attribute.String(obs.AttrStorageOperation, op), attribute.String(obs.AttrOutcome, outcome))
+		s.ops.Add(ctx, 1, attrs)
+		s.duration.Record(ctx, time.Since(start).Seconds(), attrs)
+		span.End()
+	}
 }
 
-// initStorageService initializes observability for storage service
-func initStorageService(s *StorageServiceImpl) *StorageServiceImpl {
-	s.tracer = otel.Tracer("image-gallery/service/storage")
-	meter := otel.Meter("image-gallery/service/storage")
-
-	// Create metrics (ignore errors for graceful degradation)
-	var err error
-	s.storageOperationsCounter, err = meter.Int64Counter(
-		"storage.operations.total",
-		metric.WithDescription("Total number of storage operations"),
-		metric.WithUnit("{operation}"),
-	)
-	if err != nil {
-		s.storageOperationsCounter = nil
+func (s *StorageServiceImpl) addBytes(ctx context.Context, dir string, n int64) {
+	if n > 0 {
+		s.transferred.Add(ctx, n, metric.WithAttributes(attribute.String(obs.AttrStorageProvider, s.provider), attribute.String(obs.AttrStorageDirection, dir)))
 	}
-
-	s.storageOperationsDuration, err = meter.Float64Histogram(
-		"storage.operation.duration",
-		metric.WithDescription("Duration of storage operations"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		s.storageOperationsDuration = nil
-	}
-
-	s.storageBytesTransferred, err = meter.Int64Counter(
-		"storage.bytes.transferred",
-		metric.WithDescription("Total bytes transferred to/from storage"),
-		metric.WithUnit("By"),
-	)
-	if err != nil {
-		s.storageBytesTransferred = nil
-	}
-
-	return s
 }
 
-// Store saves a file and returns the storage path
-func (s *StorageServiceImpl) Store(ctx context.Context, filename string, contentType string, data io.Reader, size int64) (string, error) {
-	startTime := time.Now()
-	ctx, span := s.tracer.Start(ctx, "Store",
-		trace.WithAttributes(
-			attribute.String("storage.filename", filename),
-			attribute.String("storage.content_type", contentType),
-			attribute.Int64("storage.size", size),
-		),
-	)
-	defer span.End()
-
-	var path string
-	var err error
-
-	if s.service != nil {
-		path, err = s.service.Store(ctx, filename, contentType, data, size)
-	} else {
-		// Fallback to MinIOClient if service not available
-		path = "images/" + filename
-		err = s.client.UploadFile(ctx, path, data, size, contentType)
+func (s *StorageServiceImpl) Store(ctx context.Context, filename, contentType string, data io.Reader, size int64) (string, error) {
+	ctx, done := s.observe(ctx, "put", filename)
+	path, err := s.service.Store(ctx, filename, contentType, data, size)
+	done(err)
+	if err == nil {
+		s.addBytes(ctx, "write", size)
 	}
-
-	// Record metrics
-	duration := time.Since(startTime).Seconds()
-	attrs := []attribute.KeyValue{
-		attribute.String("operation", "store"),
-		attribute.String("content_type", contentType),
-	}
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "store failed")
-		attrs = append(attrs, attribute.String("status", "error"))
-	} else {
-		span.SetAttributes(attribute.String("storage.path", path))
-		span.SetStatus(codes.Ok, "")
-		attrs = append(attrs, attribute.String("status", "success"))
-	}
-
-	if s.storageOperationsCounter != nil {
-		s.storageOperationsCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-	if s.storageOperationsDuration != nil {
-		s.storageOperationsDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-	}
-
 	return path, err
 }
 
-// Retrieve gets a file from storage
-func (s *StorageServiceImpl) Retrieve(ctx context.Context, path string) (io.ReadCloser, error) {
-	startTime := time.Now()
-	ctx, span := s.tracer.Start(ctx, "Retrieve",
-		trace.WithAttributes(
-			attribute.String("storage.path", path),
-		),
-	)
-	defer span.End()
-
-	var obj io.ReadCloser
-	var err error
-
-	if s.service != nil {
-		obj, err = s.service.Retrieve(ctx, path)
-	} else {
-		// Fallback to MinIOClient. GetFile/GetObject is lazy and does not
-		// contact the server, so it never errors on a missing key - only
-		// Stat (or Read) does. Stat eagerly here so a missing object is
-		// reported as an error from Retrieve instead of surfacing later
-		// on the first Read of the returned reader.
-		var minioObj *minio.Object
-		minioObj, err = s.client.GetFile(ctx, path)
-		if err == nil {
-			if _, statErr := minioObj.Stat(); statErr != nil {
-				_ = minioObj.Close() //nolint:errcheck // Cleanup operation in error path
-				err = statErr
-			} else {
-				obj = minioObj
-			}
-		}
+func (s *StorageServiceImpl) StoreAt(ctx context.Context, path, contentType string, data io.Reader, size int64) error {
+	ctx, done := s.observe(ctx, "put", path)
+	err := s.service.StoreAt(ctx, path, contentType, data, size)
+	done(err)
+	if err == nil {
+		s.addBytes(ctx, "write", size)
 	}
-
-	// Record metrics
-	duration := time.Since(startTime).Seconds()
-	attrs := []attribute.KeyValue{
-		attribute.String("operation", "retrieve"),
-	}
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "retrieve failed")
-		attrs = append(attrs, attribute.String("status", "error"))
-	} else {
-		span.SetStatus(codes.Ok, "")
-		attrs = append(attrs, attribute.String("status", "success"))
-	}
-
-	if s.storageOperationsCounter != nil {
-		s.storageOperationsCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-	if s.storageOperationsDuration != nil {
-		s.storageOperationsDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-	}
-
-	return obj, err
-}
-
-// Delete removes a file from storage
-func (s *StorageServiceImpl) Delete(ctx context.Context, path string) error {
-	startTime := time.Now()
-	ctx, span := s.tracer.Start(ctx, "Delete",
-		trace.WithAttributes(
-			attribute.String("storage.path", path),
-		),
-	)
-	defer span.End()
-
-	var err error
-	if s.service != nil {
-		err = s.service.Delete(ctx, path)
-	} else {
-		err = s.client.DeleteFile(ctx, path)
-	}
-
-	// Record metrics
-	duration := time.Since(startTime).Seconds()
-	attrs := []attribute.KeyValue{
-		attribute.String("operation", "delete"),
-	}
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "delete failed")
-		attrs = append(attrs, attribute.String("status", "error"))
-	} else {
-		span.SetStatus(codes.Ok, "")
-		attrs = append(attrs, attribute.String("status", "success"))
-	}
-
-	if s.storageOperationsCounter != nil {
-		s.storageOperationsCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-	if s.storageOperationsDuration != nil {
-		s.storageOperationsDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-	}
-
 	return err
 }
 
-// Exists checks if a file exists in storage
-func (s *StorageServiceImpl) Exists(ctx context.Context, path string) (bool, error) {
-	if s.service != nil {
-		return s.service.Exists(ctx, path)
-	}
-	// Check if file exists using MinIOClient. GetFile/GetObject is lazy and
-	// does not contact the server, so Stat is required to actually verify
-	// the object is present.
-	obj, err := s.client.GetFile(ctx, path)
+// countingReadCloser reports the bytes actually read on Close.
+type countingReadCloser struct {
+	io.ReadCloser
+	n      int64
+	onDone func(int64)
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	c.onDone(c.n)
+	return c.ReadCloser.Close()
+}
+
+func (s *StorageServiceImpl) Retrieve(ctx context.Context, path string) (io.ReadCloser, error) {
+	ctx, done := s.observe(ctx, "get", path)
+	rc, err := s.service.Retrieve(ctx, path)
+	done(err)
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return false, nil
-		}
-		return false, err
+		return nil, err
 	}
-	defer func() { _ = obj.Close() }() //nolint:errcheck // Cleanup operation, error not actionable
-
-	if _, err := obj.Stat(); err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+	return &countingReadCloser{ReadCloser: rc, onDone: func(n int64) { s.addBytes(ctx, "read", n) }}, nil
 }
 
-// GenerateURL creates a temporary or permanent URL for file access
-func (s *StorageServiceImpl) GenerateURL(ctx context.Context, path string, expiry int64) (string, error) {
-	if s.service != nil {
-		return s.service.GenerateURL(ctx, path, expiry)
-	}
-	// Return a simple URL path for MinIOClient
-	return s.client.GetFileURL(path), nil
+func (s *StorageServiceImpl) Delete(ctx context.Context, path string) error {
+	ctx, done := s.observe(ctx, "delete", path)
+	err := s.service.Delete(ctx, path)
+	done(err)
+	return err
 }
 
-// GetFileInfo returns metadata about a stored file
+// Exists records a missing object as a successful stat, not an error.
+func (s *StorageServiceImpl) Exists(ctx context.Context, path string) (bool, error) {
+	ctx, done := s.observe(ctx, "stat", path)
+	ok, err := s.service.Exists(ctx, path)
+	done(err)
+	return ok, err
+}
+
 func (s *StorageServiceImpl) GetFileInfo(ctx context.Context, path string) (*image.FileInfo, error) {
-	if s.service != nil {
-		info, err := s.service.GetFileInfo(ctx, path)
-		if err != nil {
-			return nil, err
-		}
-		return &image.FileInfo{
-			Path:         info.Path,
-			Size:         info.Size,
-			ContentType:  info.ContentType,
-			LastModified: info.LastModified,
-			ETag:         info.ETag,
-		}, nil
+	ctx, done := s.observe(ctx, "stat", path)
+	info, err := s.service.GetFileInfo(ctx, path)
+	done(err)
+	if err != nil {
+		return nil, err
 	}
-	// Return minimal info for MinIOClient
-	return &image.FileInfo{
-		Path:         path,
-		Size:         0,
-		ContentType:  "application/octet-stream",
-		LastModified: time.Now().Unix(),
-	}, nil
+	return &image.FileInfo{Path: info.Path, Size: info.Size, ContentType: info.ContentType, LastModified: info.LastModified, ETag: info.ETag}, nil
 }
 
-// ListObjects lists objects in storage (additional method for gallery)
+// ListObjects lists objects (gallery fallback and the startup sync).
 func (s *StorageServiceImpl) ListObjects(ctx context.Context, prefix string, maxKeys int) ([]ObjectInfo, error) {
-	if s.service != nil {
-		objects, err := s.service.ListObjects(ctx, prefix, maxKeys)
-		if err != nil {
-			return nil, err
-		}
-		// Convert from storage.ObjectInfo to local ObjectInfo
-		result := make([]ObjectInfo, len(objects))
-		for i, obj := range objects {
-			result[i] = ObjectInfo{
-				Key:          obj.Key,
-				Size:         obj.Size,
-				ContentType:  obj.ContentType,
-				LastModified: obj.LastModified,
-				ETag:         obj.ETag,
-				UserMetadata: obj.UserMetadata,
-			}
-		}
-		return result, nil
+	ctx, done := s.observe(ctx, "list", prefix)
+	objects, err := s.service.ListObjects(ctx, prefix, maxKeys)
+	done(err)
+	if err != nil {
+		return nil, err
 	}
-
-	// Use MinIOClient to list objects directly
-	if s.client != nil {
-		objects, err := s.client.ListObjects(ctx, prefix, maxKeys)
-		if err != nil {
-			return nil, err
-		}
-
-		// Convert from storage.MinIOObjectInfo to local ObjectInfo
-		result := make([]ObjectInfo, len(objects))
-		for i, obj := range objects {
-			result[i] = ObjectInfo{
-				Key:          obj.Key,
-				Size:         obj.Size,
-				ContentType:  obj.ContentType,
-				LastModified: obj.LastModified,
-				ETag:         obj.ETag,
-				UserMetadata: obj.UserMetadata,
-			}
-		}
-		return result, nil
+	result := make([]ObjectInfo, len(objects))
+	for i, o := range objects {
+		result[i] = ObjectInfo{Key: o.Key, Size: o.Size, ContentType: o.ContentType, LastModified: o.LastModified, ETag: o.ETag, UserMetadata: o.UserMetadata}
 	}
-
-	return []ObjectInfo{}, nil
+	return result, nil
 }
 
-// ObjectInfo represents information about a stored object (for compatibility)
+// ObjectInfo represents information about a stored object (for compatibility).
 type ObjectInfo struct {
 	Key          string            `json:"key"`
 	Size         int64             `json:"size"`

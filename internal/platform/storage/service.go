@@ -13,9 +13,6 @@ import (
 	"time"
 
 	"image-gallery/internal/config"
-
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // Constants for repeated string literals
@@ -25,47 +22,21 @@ const (
 
 // Service implements the domain StorageService interface
 type Service struct {
-	client     *minio.Client
-	bucketName string
-	config     *config.StorageConfig
+	store  ObjectStore
+	config *config.StorageConfig
 }
 
-// NewService creates a new storage service
-func NewService(cfg *config.StorageConfig) (*Service, error) {
-	if cfg == nil {
-		return nil, errors.New("storage config cannot be nil")
+// NewService wraps an ObjectStore with the upload validation rules. The store
+// owns connectivity and bucket setup.
+func NewService(cfg *config.StorageConfig, store ObjectStore) (*Service, error) {
+	if cfg == nil || store == nil {
+		return nil, errors.New("storage config and store are required")
 	}
-
-	// Use IAM credentials (EKS Pod Identity/IRSA) if no static credentials are provided
-	// This enables the application to work with AWS IAM roles for service accounts
-	var creds *credentials.Credentials
-	if cfg.AccessKeyID == "" && cfg.SecretAccessKey == "" {
-		creds = credentials.NewIAM("")
-	} else {
-		creds = credentials.NewStaticV4(cfg.AccessKeyID, cfg.SecretAccessKey, "")
-	}
-
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  creds,
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create MinIO client: %w", err)
-	}
-
-	service := &Service{
-		client:     client,
-		bucketName: cfg.BucketName,
-		config:     cfg,
-	}
-
-	if err := service.ensureBucket(context.Background()); err != nil {
-		return nil, fmt.Errorf("failed to ensure bucket exists: %w", err)
-	}
-
-	return service, nil
+	return &Service{store: store, config: cfg}, nil
 }
+
+// Provider is the backend name (s3, gcs, memory).
+func (s *Service) Provider() string { return s.store.Provider() }
 
 // Store implements StorageService.Store
 func (s *Service) Store(ctx context.Context, filename string, contentType string, data io.Reader, size int64) (string, error) {
@@ -108,31 +79,30 @@ func (s *Service) Store(ctx context.Context, filename string, contentType string
 	sizeReader := &sizeCountingReader{reader: bufferedData, maxSize: s.getMaxFileSize()}
 	hashReader := &hashingReader{reader: sizeReader, hasher: sha256.New()}
 
-	// Upload to MinIO
-	// CRITICAL: Pass actual file size to prevent SDK from buffering entire file in memory
-	// When size is known, MinIO SDK streams efficiently without large buffer allocations
-	info, err := s.client.PutObject(ctx, s.bucketName, storagePath, hashReader, size, minio.PutObjectOptions{
-		ContentType: contentType,
-		UserMetadata: map[string]string{
-			"original-filename": filename,
-			"upload-time":       time.Now().UTC().Format(time.RFC3339),
-		},
+	err = s.store.Put(ctx, storagePath, contentType, hashReader, size, map[string]string{
+		"original-filename": filename,
+		"upload-time":       time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
 	}
-
-	// Validate upload
-	if info.Size == 0 {
-		// Clean up failed upload
-		_ = s.client.RemoveObject(ctx, s.bucketName, storagePath, minio.RemoveObjectOptions{}) //nolint:errcheck // Cleanup operation in error path
+	if sizeReader.size == 0 {
+		_ = s.store.Delete(ctx, storagePath) //nolint:errcheck // cleanup in error path
 		return "", errors.New("uploaded file has zero size")
 	}
-
-	// Note: MaxUploadSize validation moved to application layer
-	// This can be added to config if needed
-
 	return storagePath, nil
+}
+
+// StoreAt writes to a caller-chosen key (worker thumbnails:
+// thumbnails/<id>.<ext>). Rewriting the same key is how reprocessing stays idempotent.
+func (s *Service) StoreAt(ctx context.Context, key, contentType string, data io.Reader, size int64) error {
+	if key == "" || data == nil {
+		return errors.New("key and data are required")
+	}
+	if !s.isValidContentType(contentType) {
+		return fmt.Errorf("unsupported content type: %s", contentType)
+	}
+	return s.store.Put(ctx, key, contentType, data, size, nil)
 }
 
 // Retrieve implements StorageService.Retrieve
@@ -141,22 +111,11 @@ func (s *Service) Retrieve(ctx context.Context, path string) (io.ReadCloser, err
 		return nil, errors.New("path cannot be empty")
 	}
 
-	obj, err := s.client.GetObject(ctx, s.bucketName, path, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get object: %w", err)
+	rc, err := s.store.Get(ctx, path)
+	if errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("file not found: %s: %w", path, err)
 	}
-
-	// Verify object exists by attempting to read stat
-	_, err = obj.Stat()
-	if err != nil {
-		_ = obj.Close() //nolint:errcheck // Object cleanup in error path
-		if minio.ToErrorResponse(err).Code == noSuchKeyError {
-			return nil, fmt.Errorf("file not found: %s", path)
-		}
-		return nil, fmt.Errorf("failed to stat object: %w", err)
-	}
-
-	return obj, nil
+	return rc, err
 }
 
 // Delete implements StorageService.Delete
@@ -175,8 +134,7 @@ func (s *Service) Delete(ctx context.Context, path string) error {
 		return fmt.Errorf("file not found: %s", path)
 	}
 
-	err = s.client.RemoveObject(ctx, s.bucketName, path, minio.RemoveObjectOptions{})
-	if err != nil {
+	if err := s.store.Delete(ctx, path); err != nil {
 		return fmt.Errorf("failed to delete object: %w", err)
 	}
 
@@ -189,34 +147,11 @@ func (s *Service) Exists(ctx context.Context, path string) (bool, error) {
 		return false, errors.New("path cannot be empty")
 	}
 
-	_, err := s.client.StatObject(ctx, s.bucketName, path, minio.StatObjectOptions{})
-	if err != nil {
-		if minio.ToErrorResponse(err).Code == noSuchKeyError {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to stat object: %w", err)
+	_, err := s.store.Stat(ctx, path)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
 	}
-
-	return true, nil
-}
-
-// GenerateURL implements StorageService.GenerateURL
-func (s *Service) GenerateURL(ctx context.Context, path string, expiry int64) (string, error) {
-	if path == "" {
-		return "", errors.New("path cannot be empty")
-	}
-
-	if expiry <= 0 {
-		expiry = 3600 // Default 1 hour
-	}
-
-	duration := time.Duration(expiry) * time.Second
-	presignedURL, err := s.client.PresignedGetObject(ctx, s.bucketName, path, duration, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
-	}
-
-	return presignedURL.String(), nil
+	return err == nil, err
 }
 
 // FileInfo represents metadata about a stored file
@@ -234,126 +169,34 @@ func (s *Service) GetFileInfo(ctx context.Context, path string) (*FileInfo, erro
 		return nil, errors.New("path cannot be empty")
 	}
 
-	stat, err := s.client.StatObject(ctx, s.bucketName, path, minio.StatObjectOptions{})
+	info, err := s.store.Stat(ctx, path)
+	if errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("file not found: %s: %w", path, err)
+	}
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == noSuchKeyError {
-			return nil, fmt.Errorf("file not found: %s", path)
-		}
 		return nil, fmt.Errorf("failed to stat object: %w", err)
 	}
 
 	return &FileInfo{
 		Path:         path,
-		Size:         stat.Size,
-		ContentType:  stat.ContentType,
-		LastModified: stat.LastModified.Unix(),
-		ETag:         stat.ETag,
+		Size:         info.Size,
+		ContentType:  info.ContentType,
+		LastModified: info.LastModified.Unix(),
+		ETag:         info.ETag,
 	}, nil
 }
 
 // Health checks the health of the storage service
 func (s *Service) Health(ctx context.Context) error {
-	// Check if we can list objects (basic connectivity test)
-	objectCh := s.client.ListObjects(ctx, s.bucketName, minio.ListObjectsOptions{
-		MaxKeys: 1,
-	})
-
-	// Consume one object from the channel or timeout
-	select {
-	case <-objectCh:
-		return nil
-	case <-time.After(5 * time.Second):
-		return errors.New("storage health check timeout")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return s.store.Health(ctx)
 }
 
 // ListObjects lists objects in the bucket with pagination
 func (s *Service) ListObjects(ctx context.Context, prefix string, maxKeys int) ([]ObjectInfo, error) {
-	if maxKeys <= 0 {
-		maxKeys = 1000 // Default limit
-	}
-
-	options := minio.ListObjectsOptions{
-		Prefix:       prefix,
-		MaxKeys:      maxKeys,
-		Recursive:    true,
-		WithMetadata: true,
-	}
-
-	objectCh := s.client.ListObjects(ctx, s.bucketName, options)
-
-	objects := make([]ObjectInfo, 0, maxKeys)
-	for object := range objectCh {
-		if object.Err != nil {
-			return nil, fmt.Errorf("error listing objects: %w", object.Err)
-		}
-
-		objects = append(objects, ObjectInfo{
-			Key:          object.Key,
-			Size:         object.Size,
-			ContentType:  object.ContentType,
-			LastModified: object.LastModified,
-			ETag:         object.ETag,
-			UserMetadata: object.UserMetadata,
-		})
-	}
-
-	return objects, nil
-}
-
-// Copy copies an object from one path to another
-func (s *Service) Copy(ctx context.Context, srcPath, dstPath string) error {
-	if srcPath == "" || dstPath == "" {
-		return errors.New("source and destination paths cannot be empty")
-	}
-
-	srcOptions := minio.CopySrcOptions{
-		Bucket: s.bucketName,
-		Object: srcPath,
-	}
-
-	dstOptions := minio.CopyDestOptions{
-		Bucket: s.bucketName,
-		Object: dstPath,
-	}
-
-	_, err := s.client.CopyObject(ctx, dstOptions, srcOptions)
-	if err != nil {
-		return fmt.Errorf("failed to copy object from %s to %s: %w", srcPath, dstPath, err)
-	}
-
-	return nil
-}
-
-// GetObjectURL returns a public URL for an object (if bucket policy allows)
-func (s *Service) GetObjectURL(path string) string {
-	if s.config.UseSSL {
-		return fmt.Sprintf("https://%s/%s/%s", s.config.Endpoint, s.bucketName, path)
-	}
-	return fmt.Sprintf("http://%s/%s/%s", s.config.Endpoint, s.bucketName, path)
+	return s.store.List(ctx, prefix, maxKeys)
 }
 
 // Private helper methods
-
-func (s *Service) ensureBucket(ctx context.Context) error {
-	exists, err := s.client.BucketExists(ctx, s.bucketName)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		err = s.client.MakeBucket(ctx, s.bucketName, minio.MakeBucketOptions{
-			Region: s.config.Region,
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
 
 func (s *Service) generateStoragePath(filename string) string {
 	// Create a hash-based directory structure for better distribution
@@ -443,26 +286,6 @@ func (r *hashingReader) Read(p []byte) (n int, err error) {
 		r.hasher.Write(p[:n])
 	}
 	return
-}
-
-// Legacy support - keep the original MinIOClient from minio.go working
-
-// Legacy methods for backward compatibility
-func (s *Service) UploadFile(ctx context.Context, objectName string, reader io.Reader, objectSize int64, contentType string) error {
-	_, err := s.Store(ctx, objectName, contentType, reader, objectSize)
-	return err
-}
-
-func (s *Service) GetFile(ctx context.Context, objectName string) (io.ReadCloser, error) {
-	return s.Retrieve(ctx, objectName)
-}
-
-func (s *Service) DeleteFile(ctx context.Context, objectName string) error {
-	return s.Delete(ctx, objectName)
-}
-
-func (s *Service) GetFileURL(objectName string) string {
-	return s.GetObjectURL(objectName)
 }
 
 // Security validation methods

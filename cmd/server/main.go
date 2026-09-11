@@ -99,7 +99,7 @@ func main() {
 	// - Kubernetes: Atlas Operator handles migrations automatically
 	logger.GetZerolog().Info().Msg("Database connected - migrations are handled by Atlas")
 
-	storageClient, err := storage.NewMinIOClient(cfg.Storage)
+	store, err := storage.NewObjectStore(context.Background(), cfg.Storage)
 	if err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			logger.GetZerolog().Error().Err(closeErr).Msg("Error closing database connection")
@@ -109,7 +109,7 @@ func main() {
 	logger.GetZerolog().Info().Msg("Storage client initialized")
 
 	// Initialize dependency injection container with observability
-	container, err := services.NewContainerWithObservability(cfg, db, storageClient, logger)
+	container, err := services.NewContainerWithObservability(cfg, db, store, logger)
 	if err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			logger.GetZerolog().Error().Err(closeErr).Msg("Error closing database connection")
@@ -171,7 +171,7 @@ func syncExistingImages(ctx context.Context, container *services.Container, logg
 	dbRepo := container.DB()
 
 	// Create a storage service wrapper to list objects
-	storageSvc, err := storage.NewService(&container.Config().Storage)
+	storageSvc, err := storage.NewService(&container.Config().Storage, container.ObjectStore())
 	if err != nil {
 		return fmt.Errorf("failed to create storage service: %w", err)
 	}
