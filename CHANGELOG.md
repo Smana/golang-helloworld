@@ -5,6 +5,82 @@ This file tracks all notable changes to the Image Gallery project.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/Smana/image-gallery/compare/v1.7.7...v2.0.0) (2026-09-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** the binary is /app/image-gallery (was /app/server) and cmd/server is removed.
+* **upload:** image.uploads.total, image.deletions.total, image.cache.hits/misses, settings.read/write.total and settings.cache.hits/misses are replaced by image.uploads, image.deletions, cache.lookups and settings.operations.
+* **storage:** the storage.operations.total, storage.bytes.transferred and image-gallery/service/storage span names are replaced by storage.operations, storage.transferred and storage.<op> CLIENT spans.
+* **observability:** http.server.request.count and http.server.response.size are replaced by the semconv http.server.request.duration count and http.server.response.body.size.
+
+### Features
+
+* **cli:** one image-gallery binary with serve as the default command ([6afc7a6](https://github.com/Smana/image-gallery/commit/6afc7a60ed2112033705ddc2974fe5112b47da65))
+* **db:** processing status for asynchronous thumbnails, and the demo_controls table ([9b8b204](https://github.com/Smana/image-gallery/commit/9b8b204b61da7ea86ab8f838dd73c604280494f3))
+* **demo:** make the demo control endpoints switchable ([22ec242](https://github.com/Smana/image-gallery/commit/22ec242e0a0ae05d684e74b3671d51e87cef168c))
+* **demo:** switchable fault injection for the observability demo ([9c121dc](https://github.com/Smana/image-gallery/commit/9c121dcf8d75991c8e774a86dfd2542e98fc6632))
+* image-gallery v2 — worker, GCS, demo controls, load generator, telemetry contract ([8f99b7a](https://github.com/Smana/image-gallery/commit/8f99b7a03ae830bbbbd4ef639ec269cb1677d171))
+* **loadgen:** open-loop load generator with demo scenarios ([428b3c9](https://github.com/Smana/image-gallery/commit/428b3c9e49f028177f1f7cd61067117f053d7d7d))
+* **observability:** current OTel SDK, span-drop counters and Go runtime metrics ([e6e9bf3](https://github.com/Smana/image-gallery/commit/e6e9bf32c42cecdb49257bc7bb31dd577ec6f62f))
+* **queue:** stream jobs over Valkey with trace propagation, retries and dead-lettering ([5260aa4](https://github.com/Smana/image-gallery/commit/5260aa4ec5f5978fb0bd0fa804558392bf7049dc))
+* **storage:** one object-store interface over S3 and GCS ([07a9a8c](https://github.com/Smana/image-gallery/commit/07a9a8c73e65f7335da87f01df2d5cad595bcf71))
+* **upload:** hand images to the worker queue and serve thumbnails ([5b9860d](https://github.com/Smana/image-gallery/commit/5b9860da337c6a3bbbe9894f9ae2a658128473c5))
+* **worker:** process images from the queue into thumbnails and metadata ([37dc5a5](https://github.com/Smana/image-gallery/commit/37dc5a5167f92f79023ea6fb6f71562e0f99e0e6))
+
+
+### Bug Fixes
+
+* **api:** remove the unroutable image view URL ([dbc8680](https://github.com/Smana/image-gallery/commit/dbc86808c593dbb39b6a4b0bf5ce822b3338732a))
+* **app:** start the web role without Valkey instead of crashing ([6a2b9bd](https://github.com/Smana/image-gallery/commit/6a2b9bd5c1629a4b02621f98f7218aa56f38957b))
+* **cache:** drop the single-image cache on worker status writes, not just lists ([6a3bf67](https://github.com/Smana/image-gallery/commit/6a3bf6783107e24c5d90babd66d1d78684b566b5))
+* **config:** validate GCS bucket names at startup ([4ba4bbb](https://github.com/Smana/image-gallery/commit/4ba4bbbd084106815f4e4e3062edec46e0618b9e))
+* **db:** check RowsAffected errors and document Update's status-field exclusion ([825bab5](https://github.com/Smana/image-gallery/commit/825bab59e4433488b3e71a71971fa43ee893f8c0))
+* **db:** rehash the migration directory after migration 004 ([13502bc](https://github.com/Smana/image-gallery/commit/13502bccf67ef15acbfa9dd77f87d627e8746c49))
+* **demo:** cap worker delay below the queue claim timeout ([a2ef90c](https://github.com/Smana/image-gallery/commit/a2ef90c6b45518643e96498b08217e476d5f2710))
+* **demo:** record every injected fault on the span, not just the last ([baa3cfc](https://github.com/Smana/image-gallery/commit/baa3cfc56ffe35e51cf0cde437ff4e6300b62ee8))
+* **demo:** stop the slow-query fault from exhausting the connection pool ([b99a4f9](https://github.com/Smana/image-gallery/commit/b99a4f9ef4b82f080b13f4e34d4d4f7cdd8c3e2a))
+* **deps:** clear nine advisories, which raises the Go floor to 1.26 ([eb626d1](https://github.com/Smana/image-gallery/commit/eb626d1646b5821c82557c97c8b1bc0f77e48411))
+* **e2e:** unregister the queue gauges as the worker now does ([2eebbce](https://github.com/Smana/image-gallery/commit/2eebbce40d9610039083d2f255a9cc8535cdb127))
+* **image:** load tags on GetByID and implement image stats ([cc1c282](https://github.com/Smana/image-gallery/commit/cc1c2829c29eac956d34e242ff504c1103e0d442))
+* **observability:** continue incoming traces and key HTTP telemetry by route pattern ([9b66d7d](https://github.com/Smana/image-gallery/commit/9b66d7d6fa7e1df9aa96e9325c834494b7a212c1))
+* **observability:** report the built version instead of a stale literal ([03b9f0c](https://github.com/Smana/image-gallery/commit/03b9f0c1ad41d3d14c92dc0fd8b2aabe15ee26b5))
+* **queue:** bound the dead-letter hook so it cannot block consumer shutdown ([5e971f7](https://github.com/Smana/image-gallery/commit/5e971f72d1804ad68a632eb9b83e1a25249bbc3c))
+* **security:** bound multipart parsing and make the rune conversion safe ([f6d3281](https://github.com/Smana/image-gallery/commit/f6d328117e65426c6d51acc3579c5a0565f37463))
+* **storage:** persist and verify objects via the MinIOClient fallback ([536ed53](https://github.com/Smana/image-gallery/commit/536ed536038334d0d9a8b07f2d413e2ead1695e3))
+* **storage:** time the whole object read, not just opening it ([355fd6e](https://github.com/Smana/image-gallery/commit/355fd6ea171c17e6f41eb809c576bc4a402d2153))
+* **upload:** mark images failed when no queue is configured ([18e2cce](https://github.com/Smana/image-gallery/commit/18e2ccecaaf7313e706f0d3e35ca2e96aff9f124))
+* **upload:** report a failed status update after a failed enqueue ([5ece5af](https://github.com/Smana/image-gallery/commit/5ece5afbde54b660f7c98a5f32cb0df311d4a140))
+* **web:** parent view-image spans to the incoming request ([caba4b2](https://github.com/Smana/image-gallery/commit/caba4b2cb47f16892775d5e50cf79ee93618c2da))
+* **worker:** reject oversized images before decoding them ([bde3666](https://github.com/Smana/image-gallery/commit/bde36669340faa1becaa23c49acc809d45096217))
+* **worker:** unregister the queue gauges before closing their client ([00a5160](https://github.com/Smana/image-gallery/commit/00a5160954c79143f9fb131c5a781dd351a4e7d2))
+
+
+### Documentation
+
+* add the worker and queue to the architecture, drop dead targets and routes ([c210a29](https://github.com/Smana/image-gallery/commit/c210a299f044384da4b3104b3b8891e0e907ca6e))
+* v2 roles, storage providers, telemetry contract, demo controls and load generator ([174728d](https://github.com/Smana/image-gallery/commit/174728dc2ece0a5479e19adcad0db6f938d11c4a))
+
+
+### Code Refactoring
+
+* clear the pre-existing goconst, gocritic, prealloc and staticcheck findings ([20f9293](https://github.com/Smana/image-gallery/commit/20f92933e397580a83c5406bd91f3bd5d3ae34cc))
+* **loadgen:** route span attrs through constants, dedup ID parsing ([78637f7](https://github.com/Smana/image-gallery/commit/78637f7ad062cfb3d8f5fe401655e56d2367d69a))
+* name the duplicated format strings and split validateStorage ([7a0e0d1](https://github.com/Smana/image-gallery/commit/7a0e0d1b7f0f32d1eab8ca92e3491edf4bcd075c))
+* remove dead fallback and duplicated sampler parsing ([9d6a0bb](https://github.com/Smana/image-gallery/commit/9d6a0bb652e08acb71b29f2ccfeeec72b91fbc4c))
+* **storage:** one storage service over ObjectStore, uniform storage telemetry ([efcb34e](https://github.com/Smana/image-gallery/commit/efcb34e487f2981231394284c2ca60aaaea94278))
+
+
+### Continuous Integration
+
+* correct the trivy-action tag form so the release job can resolve it ([e636188](https://github.com/Smana/image-gallery/commit/e636188ad0e88064dd55573f0e02666ffc79abf9))
+* correct the trivy-action tag form so the release job can resolve it ([3009f44](https://github.com/Smana/image-gallery/commit/3009f447bcf0144db7f39de1fef2c4a69d1059aa))
+* lint with a pinned golangci-lint v2, scoped to changed code ([1002bc2](https://github.com/Smana/image-gallery/commit/1002bc25fc6fdce59e68308df6c049f62697fcc9))
+* pin the Dagger Go image and golangci-lint instead of floating both on latest ([0a839dd](https://github.com/Smana/image-gallery/commit/0a839ddd1e7461f2a091db2f0e7203a0282a4210))
+* pin the Go image for the lint step only, not for every Dagger call ([bd13b85](https://github.com/Smana/image-gallery/commit/bd13b85fca397e349186cb1f102d0003a48e8b17))
+* run lint, tests and govulncheck on a pinned Go, and set up Go for releases ([e5c30fe](https://github.com/Smana/image-gallery/commit/e5c30fe1108a7e0f3f39ef5d4b8fa8add704e187))
+
 ## [1.7.7](https://github.com/Smana/image-gallery/compare/v1.7.6...v1.7.7) (2025-11-02)
 
 
