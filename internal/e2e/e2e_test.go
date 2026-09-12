@@ -102,9 +102,11 @@ func TestEndToEndTraceAndInstrumentContract(t *testing.T) {
 	}
 	gauges := redis.NewClient(&redis.Options{Addr: tc.RedisEndpoint})
 	defer func() { _ = gauges.Close() }()
-	if err := queue.RegisterGauges(gauges, otel.Meter("image-gallery/queue"), queue.DefaultStream, queue.DefaultGroup); err != nil {
+	gaugeReg, err := queue.RegisterGauges(gauges, otel.Meter("image-gallery/queue"), queue.DefaultStream, queue.DefaultGroup)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = gaugeReg.Unregister() }() // before gauges.Close, as in the worker
 	wctx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { _ = consumer.Run(wctx, proc.Handle); close(workerDone) }()
