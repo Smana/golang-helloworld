@@ -72,10 +72,6 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // by the raw path: per-image IDs made every URL its own span name and series.
 // metrics may be nil (metrics disabled).
 func Middleware(tracer trace.Tracer, metrics *HTTPMetrics) func(http.Handler) http.Handler {
-	// Fallback to GetTracer() when nil tracer passed (legacy constructor compatibility)
-	if tracer == nil {
-		tracer = GetTracer()
-	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == healthzPath || r.URL.Path == readyzPath {

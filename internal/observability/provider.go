@@ -145,24 +145,29 @@ func createSampler(config Config) (sdktrace.Sampler, error) {
 	case SamplerAlwaysOff:
 		return sdktrace.NeverSample(), nil
 	case SamplerTraceIDRatio:
-		ratio, err := strconv.ParseFloat(config.TracesSamplerArg, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sampler arg: %w", err)
-		}
-		return sdktrace.TraceIDRatioBased(ratio), nil
+		return ratioSampler(config.TracesSamplerArg)
 	case SamplerParentBasedAlwaysOn:
 		return sdktrace.ParentBased(sdktrace.AlwaysSample()), nil
 	case SamplerParentBasedAlwaysOff:
 		return sdktrace.ParentBased(sdktrace.NeverSample()), nil
 	case SamplerParentBasedTraceIDRatio:
-		ratio, err := strconv.ParseFloat(config.TracesSamplerArg, 64)
+		root, err := ratioSampler(config.TracesSamplerArg)
 		if err != nil {
-			return nil, fmt.Errorf("invalid sampler arg: %w", err)
+			return nil, err
 		}
-		return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio)), nil
+		return sdktrace.ParentBased(root), nil
 	default:
 		return nil, fmt.Errorf("unknown sampler type: %s", config.TracesSampler)
 	}
+}
+
+// ratioSampler parses arg as the ratio of a TraceIDRatioBased sampler.
+func ratioSampler(arg string) (sdktrace.Sampler, error) {
+	ratio, err := strconv.ParseFloat(arg, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sampler arg: %w", err)
+	}
+	return sdktrace.TraceIDRatioBased(ratio), nil
 }
 
 // createExponentialHistogramView creates a view that converts all histograms to exponential histograms with exemplars

@@ -104,28 +104,27 @@ func (p *Processor) injectFault(ctx context.Context) error {
 func (p *Processor) process(ctx context.Context, img *domain.Image) (*domain.ProcessingResult, error) {
 	var data, thumb []byte
 	var info *storage.ImageInfo
-	var err error
+	var key string
 
-	if err := p.step(ctx, img.ID, "fetch", func(ctx context.Context) error {
+	if err := p.step(ctx, img.ID, "fetch", func(ctx context.Context) (err error) {
 		data, err = p.fetch(ctx, img.StoragePath)
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	if err := p.step(ctx, img.ID, "decode", func(ctx context.Context) error {
+	if err := p.step(ctx, img.ID, "decode", func(ctx context.Context) (err error) {
 		info, err = p.decode(ctx, data)
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	if err := p.step(ctx, img.ID, "thumbnail", func(ctx context.Context) error {
+	if err := p.step(ctx, img.ID, "thumbnail", func(ctx context.Context) (err error) {
 		thumb, err = p.thumbnail(ctx, data)
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	var key string
-	if err := p.step(ctx, img.ID, "store", func(ctx context.Context) error {
+	if err := p.step(ctx, img.ID, "store", func(ctx context.Context) (err error) {
 		key, err = p.storeThumbnail(ctx, img.ID, info.Format, thumb)
 		return err
 	}); err != nil {
