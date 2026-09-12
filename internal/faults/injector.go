@@ -121,6 +121,26 @@ func (i *Injector) SlowDB(ctx context.Context) time.Duration {
 	return time.Duration(c.SlowDBMS) * time.Millisecond
 }
 
+// SlowDBHook returns the image service's slow-DB hook: it asks SlowDB for a
+// delay and passes it to sleep, with at most limit sleeps in flight. A call
+// past the limit skips the fault, unrecorded, rather than waiting for a slot:
+// each sleep holds a database connection, so an unbounded fault could take the
+// whole pool and fail the readiness probe.
+func (i *Injector) SlowDBHook(limit int, sleep func(context.Context, time.Duration)) func(context.Context) {
+	slots := make(chan struct{}, limit)
+	return func(ctx context.Context) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		default:
+			return
+		}
+		if d := i.SlowDB(ctx); d > 0 {
+			sleep(ctx, d)
+		}
+	}
+}
+
 // WorkerFault delays the job and/or fails it (retryable), per the controls.
 func (i *Injector) WorkerFault(ctx context.Context) error {
 	c, err := i.src.Get(ctx)

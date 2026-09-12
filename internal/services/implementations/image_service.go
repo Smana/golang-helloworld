@@ -78,7 +78,8 @@ func NewImageService(
 // SetJobPublisher wires the asynchronous processing queue.
 func (s *ImageServiceImpl) SetJobPublisher(p image.JobPublisher) { s.jobs = p }
 
-// SetSlowDB installs the demo "slow DB" hook, called before each list query.
+// SetSlowDB installs the demo "slow DB" hook, called before each list query
+// that reaches the database (not on a cache hit).
 func (s *ImageServiceImpl) SetSlowDB(f func(ctx context.Context)) { s.slowDB = f }
 
 // enqueueProcessing hands the image to the worker. The upload has already
@@ -323,10 +324,6 @@ func (s *ImageServiceImpl) GetImage(ctx context.Context, id int) (*image.Image, 
 
 // ListImages retrieves images based on criteria
 func (s *ImageServiceImpl) ListImages(ctx context.Context, req *image.ListImagesRequest) (*image.ListImagesResponse, error) {
-	if s.slowDB != nil {
-		s.slowDB(ctx)
-	}
-
 	// Generate cache key based on request parameters
 	cacheKey := generateListCacheKey(req)
 
@@ -341,6 +338,9 @@ func (s *ImageServiceImpl) ListImages(ctx context.Context, req *image.ListImages
 	}
 
 	// Get from database
+	if s.slowDB != nil {
+		s.slowDB(ctx)
+	}
 	response, err := s.imageRepo.List(ctx, req)
 	if err != nil {
 		return nil, err

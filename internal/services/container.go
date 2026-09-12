@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
@@ -16,6 +17,11 @@ import (
 	"image-gallery/internal/platform/storage"
 	"image-gallery/internal/services/implementations"
 )
+
+// maxInjectedSlowQueries bounds the demo's pg_sleep calls in flight. Each holds
+// a pool connection, so it stays well below the pool's 25 open connections and
+// /readyz's ping can always get one.
+const maxInjectedSlowQueries = 4
 
 // TestConfig provides test-specific configuration for integration testing
 type TestConfig struct {
@@ -193,11 +199,9 @@ func (c *Container) initializeServices() error {
 	c.demoService = faults.NewService(implementations.NewDemoRepository(c.db), demoCache)
 	c.demoInjector = faults.NewInjector(c.demoService, c.logger)
 	if s, ok := c.imageService.(interface{ SetSlowDB(func(context.Context)) }); ok {
-		s.SetSlowDB(func(ctx context.Context) {
-			if d := c.demoInjector.SlowDB(ctx); d > 0 {
-				_ = implementations.SleepInDB(ctx, c.db, d.Seconds()) //nolint:errcheck // best-effort demo delay; a failure here must not break the list query
-			}
-		})
+		s.SetSlowDB(c.demoInjector.SlowDBHook(maxInjectedSlowQueries, func(ctx context.Context, d time.Duration) {
+			_ = implementations.SleepInDB(ctx, c.db, d.Seconds()) //nolint:errcheck // best-effort demo delay; a failure here must not break the list query
+		}))
 	}
 
 	log.Println("Dependency injection container initialized successfully")

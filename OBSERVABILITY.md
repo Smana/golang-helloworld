@@ -194,7 +194,7 @@ faults for the observability demo. Every control is off by default:
 |---|---|
 | Latency | Adds a delay (`latency_ms`), with probability `latency_probability`, to matched routes |
 | Errors | A 5xx response, with probability `error_probability` |
-| Slow DB | A slow list query (`slow_db_ms`) |
+| Slow DB | A slow list query (`slow_db_ms`), on cache misses only; at most 4 run at once, and requests past that are not delayed |
 | Worker failure | A job fails with probability `worker_failure_probability`: it retries, then dead-letters |
 | Worker slowdown | A processing delay (`worker_delay_ms`), so the queue grows |
 

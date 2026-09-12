@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,39 @@ func TestLatencyRouteFilterAndExemptPaths(t *testing.T) {
 	h.do("/api/settings")
 	if len(h.slept) != 0 {
 		t.Fatalf("latency outside latency_routes: %v", h.slept)
+	}
+}
+
+func TestSlowDBHookSkipsTheFaultPastTheLimit(t *testing.T) {
+	h := newHarness(demo.Controls{SlowDBMS: 250}, 0)
+	entered, release := make(chan struct{}, 3), make(chan struct{})
+	hook := h.inj.SlowDBHook(2, func(context.Context, time.Duration) {
+		entered <- struct{}{}
+		<-release
+	})
+
+	var wg sync.WaitGroup
+	for range 2 { // fill both slots, one at a time
+		wg.Add(1)
+		go func() { defer wg.Done(); hook(context.Background()) }()
+		<-entered
+	}
+	done := make(chan struct{})
+	go func() { hook(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the call past the limit waited for a slot instead of skipping the fault")
+	}
+	if n := strings.Count(h.logs.String(), "demo fault injected"); n != 2 {
+		t.Fatalf("recorded %d faults, want 2: a skipped fault must not be reported", n)
+	}
+
+	close(release)
+	wg.Wait()
+	hook(context.Background()) // a freed slot is used again
+	if len(entered) != 1 {
+		t.Fatal("the hook did not sleep once a slot was free")
 	}
 }
 
