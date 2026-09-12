@@ -120,6 +120,30 @@ func TestBucketNameValidation(t *testing.T) {
 	}
 }
 
+func TestGCSBucketNameValidation(t *testing.T) {
+	for bucket, valid := range map[string]bool{
+		"my-bucket":                      true,
+		"my_bucket":                      true,
+		"gallery.example.com":            true,
+		strings.Repeat("a", 63):          true,
+		strings.Repeat("a.", 100) + "a":  true,  // 201 chars, dotted
+		"ab":                             false, // too short
+		strings.Repeat("a", 64):          false, // too long without dots
+		strings.Repeat("a", 64) + ".com": false, // a dotted component over 63
+		"MyBucket":                       false,
+		"my bucket":                      false,
+		"-bucket":                        false,
+		"bucket_":                        false,
+		"192.168.1.1":                    false,
+		"goog-images":                    false,
+		"my-google-images":               false,
+		"my-bšcket":                      false,
+		"":                               false,
+	} {
+		assert.Equal(t, valid, isValidGCSBucketName(bucket), "GCS bucket name %q", bucket)
+	}
+}
+
 func TestLoadWithEnvironmentValidation(t *testing.T) {
 	// Clean environment
 	envVars := []string{

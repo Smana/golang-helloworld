@@ -149,9 +149,19 @@ func TestLoadStorageProvider(t *testing.T) {
 			envVars: map[string]string{
 				"GO_ENV":           "test",
 				"STORAGE_PROVIDER": "gcs",
-				"STORAGE_BUCKET":   "b",
+				"STORAGE_BUCKET":   "gallery_images-2",
 			},
 			expectError: false,
+		},
+		{
+			name: "gcs provider rejects an invalid bucket name at startup",
+			envVars: map[string]string{
+				"GO_ENV":           "test",
+				"STORAGE_PROVIDER": "gcs",
+				"STORAGE_BUCKET":   "My Bucket",
+			},
+			expectError:   true,
+			errorContains: "storage.bucket_name",
 		},
 		{
 			name: "unknown provider fails validation",

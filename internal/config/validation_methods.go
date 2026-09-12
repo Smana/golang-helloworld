@@ -218,19 +218,18 @@ func (c *Config) validateStorage() ValidationErrors {
 		})
 	}
 
-	// Validate bucket name: presence is required for both providers, but the
-	// S3 naming format (3-63 chars) does not apply to GCS bucket names.
+	// Validate bucket name: required for both providers, each with its own naming rules.
 	if c.Storage.BucketName == "" {
 		errors = append(errors, ValidationError{
 			Field:   "storage.bucket_name",
 			Value:   c.Storage.BucketName,
 			Message: "storage bucket name cannot be empty",
 		})
-	} else if c.Storage.Provider != storageProviderGCS && !isValidBucketName(c.Storage.BucketName) {
+	} else if msg := bucketNameError(c.Storage.Provider, c.Storage.BucketName); msg != "" {
 		errors = append(errors, ValidationError{
 			Field:   "storage.bucket_name",
 			Value:   c.Storage.BucketName,
-			Message: "storage bucket name must be 3-63 characters, lowercase alphanumeric and hyphens only",
+			Message: msg,
 		})
 	}
 
@@ -420,6 +419,57 @@ func isIPAddressFormat(name string) bool {
 		}
 	}
 	return true
+}
+
+// isValidGCSBucketName validates Cloud Storage bucket naming rules
+// (https://cloud.google.com/storage/docs/buckets#naming).
+func isValidGCSBucketName(name string) bool {
+	return isValidGCSBucketLength(name) &&
+		hasValidBucketBoundaries(name) &&
+		hasValidGCSBucketCharacters(name) &&
+		!isIPAddressFormat(name) &&
+		!strings.HasPrefix(name, "goog") && !strings.Contains(name, "google")
+}
+
+// isValidGCSBucketLength allows 3-63 characters, or up to 222 when the name has
+// dots and no dot-separated part is longer than 63.
+func isValidGCSBucketLength(name string) bool {
+	if !strings.Contains(name, ".") {
+		return isValidBucketLength(name)
+	}
+	for _, part := range strings.Split(name, ".") {
+		if len(part) > 63 {
+			return false
+		}
+	}
+	return len(name) >= 3 && len(name) <= 222
+}
+
+// hasValidGCSBucketCharacters allows lowercase alphanumerics, hyphens,
+// underscores and dots, walking bytes so no multi-byte rune gets through.
+func hasValidGCSBucketCharacters(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if b := name[i]; !isLowerAlphaNum(b) && b != '-' && b != '_' && b != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// bucketNameError says why name is not a valid bucket name for provider, or
+// returns "" when it is.
+func bucketNameError(provider, name string) string {
+	if provider == storageProviderGCS {
+		if !isValidGCSBucketName(name) {
+			return `GCS bucket name must be 3-63 characters (222 with dots): lowercase alphanumeric, ` +
+				`hyphens, underscores and dots, not starting with "goog" nor containing "google"`
+		}
+		return ""
+	}
+	if !isValidBucketName(name) {
+		return "storage bucket name must be 3-63 characters, lowercase alphanumeric and hyphens only"
+	}
+	return ""
 }
 
 func isLowerAlphaNum(b byte) bool {
