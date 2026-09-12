@@ -19,6 +19,12 @@ type Repository interface {
 	// Update modifies an existing image
 	Update(ctx context.Context, image *Image) error
 
+	// UpdateStatus sets the processing status (and error text when failed).
+	UpdateStatus(ctx context.Context, id int, status string, processingError *string) error
+
+	// CompleteProcessing stores the worker's result and marks the image ready.
+	CompleteProcessing(ctx context.Context, id int, res ProcessingResult) error
+
 	// Delete removes an image from the repository
 	Delete(ctx context.Context, id int) error
 

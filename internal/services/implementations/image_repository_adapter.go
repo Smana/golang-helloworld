@@ -36,6 +36,9 @@ func (a *ImageRepositoryAdapter) Create(ctx context.Context, img *image.Image) e
 		FileSize:         img.FileSize,
 		StoragePath:      img.StoragePath,
 		ThumbnailPath:    img.ThumbnailPath,
+		Status:           img.Status,
+		ProcessingError:  img.ProcessingError,
+		ProcessedAt:      img.ProcessedAt,
 		Width:            img.Width,
 		Height:           img.Height,
 		UploadedAt:       img.UploadedAt,
@@ -190,6 +193,9 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 		FileSize:         img.FileSize,
 		StoragePath:      img.StoragePath,
 		ThumbnailPath:    img.ThumbnailPath,
+		Status:           img.Status,
+		ProcessingError:  img.ProcessingError,
+		ProcessedAt:      img.ProcessedAt,
 		Width:            img.Width,
 		Height:           img.Height,
 		Metadata:         database.Metadata{},
@@ -208,6 +214,17 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 
 	img.UpdatedAt = dbImage.UpdatedAt
 	return nil
+}
+
+func (a *ImageRepositoryAdapter) UpdateStatus(ctx context.Context, id int, status string, processingError *string) error {
+	return a.dbRepo.UpdateStatus(ctx, id, status, processingError)
+}
+
+func (a *ImageRepositoryAdapter) CompleteProcessing(ctx context.Context, id int, r image.ProcessingResult) error {
+	return a.dbRepo.CompleteProcessing(ctx, id, database.ProcessingResult{
+		ThumbnailPath: r.ThumbnailPath, Width: r.Width, Height: r.Height,
+		Metadata: database.Metadata{"format": r.Format, "color_space": r.ColorSpace, "has_alpha": r.HasAlpha},
+	})
 }
 
 func (a *ImageRepositoryAdapter) Delete(ctx context.Context, id int) error {
@@ -280,6 +297,9 @@ func (a *ImageRepositoryAdapter) convertToBaseImage(dbImg *database.Image) *imag
 		FileSize:         dbImg.FileSize,
 		StoragePath:      dbImg.StoragePath,
 		ThumbnailPath:    dbImg.ThumbnailPath,
+		Status:           dbImg.Status,
+		ProcessingError:  dbImg.ProcessingError,
+		ProcessedAt:      dbImg.ProcessedAt,
 		Width:            dbImg.Width,
 		Height:           dbImg.Height,
 		UploadedAt:       dbImg.UploadedAt,

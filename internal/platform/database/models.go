@@ -9,20 +9,30 @@ import (
 
 // Image represents an image record in the database
 type Image struct {
-	ID               int       `json:"id" db:"id"`
-	Filename         string    `json:"filename" db:"filename"`
-	OriginalFilename string    `json:"original_filename" db:"original_filename"`
-	ContentType      string    `json:"content_type" db:"content_type"`
-	FileSize         int64     `json:"file_size" db:"file_size"`
-	StoragePath      string    `json:"storage_path" db:"storage_path"`
-	ThumbnailPath    *string   `json:"thumbnail_path,omitempty" db:"thumbnail_path"`
-	Width            *int      `json:"width,omitempty" db:"width"`
-	Height           *int      `json:"height,omitempty" db:"height"`
-	UploadedAt       time.Time `json:"uploaded_at" db:"uploaded_at"`
-	Metadata         Metadata  `json:"metadata" db:"metadata"`
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
-	Tags             []Tag     `json:"tags,omitempty" db:"-"` // Loaded separately
+	ID               int        `json:"id" db:"id"`
+	Filename         string     `json:"filename" db:"filename"`
+	OriginalFilename string     `json:"original_filename" db:"original_filename"`
+	ContentType      string     `json:"content_type" db:"content_type"`
+	FileSize         int64      `json:"file_size" db:"file_size"`
+	StoragePath      string     `json:"storage_path" db:"storage_path"`
+	ThumbnailPath    *string    `json:"thumbnail_path,omitempty" db:"thumbnail_path"`
+	Status           string     `json:"status" db:"status"`
+	ProcessingError  *string    `json:"processing_error,omitempty" db:"processing_error"`
+	ProcessedAt      *time.Time `json:"processed_at,omitempty" db:"processed_at"`
+	Width            *int       `json:"width,omitempty" db:"width"`
+	Height           *int       `json:"height,omitempty" db:"height"`
+	UploadedAt       time.Time  `json:"uploaded_at" db:"uploaded_at"`
+	Metadata         Metadata   `json:"metadata" db:"metadata"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	Tags             []Tag      `json:"tags,omitempty" db:"-"` // Loaded separately
+}
+
+// ProcessingResult is what the worker writes back for one image.
+type ProcessingResult struct {
+	ThumbnailPath string
+	Width, Height int
+	Metadata      Metadata // merged into images.metadata (jsonb ||)
 }
 
 // Tag represents a tag for categorizing images

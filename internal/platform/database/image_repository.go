@@ -24,9 +24,9 @@ func NewImageRepository(db *sql.DB) ImageRepository {
 func (r *imageRepository) Create(ctx context.Context, image *Image) error {
 	query := `
 		INSERT INTO images (
-			filename, original_filename, content_type, file_size, 
-			storage_path, thumbnail_path, width, height, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			filename, original_filename, content_type, file_size,
+			storage_path, thumbnail_path, width, height, metadata, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, uploaded_at, created_at, updated_at
 	`
 
@@ -41,6 +41,7 @@ func (r *imageRepository) Create(ctx context.Context, image *Image) error {
 		image.Width,
 		image.Height,
 		image.Metadata,
+		statusOrPending(image.Status),
 	).Scan(
 		&image.ID,
 		&image.UploadedAt,
@@ -49,6 +50,14 @@ func (r *imageRepository) Create(ctx context.Context, image *Image) error {
 	)
 
 	return err
+}
+
+// statusOrPending returns s, or "pending" when s is empty (new uploads).
+func statusOrPending(s string) string {
+	if s == "" {
+		return "pending"
+	}
+	return s
 }
 
 // scanSingleImage scans a single image row and handles not found errors
@@ -62,6 +71,9 @@ func (r *imageRepository) scanSingleImage(ctx context.Context, query string, not
 		&image.FileSize,
 		&image.StoragePath,
 		&image.ThumbnailPath,
+		&image.Status,
+		&image.ProcessingError,
+		&image.ProcessedAt,
 		&image.Width,
 		&image.Height,
 		&image.UploadedAt,
@@ -81,7 +93,7 @@ func (r *imageRepository) scanSingleImage(ctx context.Context, query string, not
 func (r *imageRepository) GetByID(ctx context.Context, id int) (*Image, error) {
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images WHERE id = $1
 	`
@@ -93,7 +105,7 @@ func (r *imageRepository) GetByID(ctx context.Context, id int) (*Image, error) {
 func (r *imageRepository) GetByFilename(ctx context.Context, filename string) (*Image, error) {
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images WHERE filename = $1
 	`
@@ -105,7 +117,7 @@ func (r *imageRepository) GetByFilename(ctx context.Context, filename string) (*
 func (r *imageRepository) GetByStoragePath(ctx context.Context, path string) (*Image, error) {
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images WHERE storage_path = $1
 	`
@@ -169,6 +181,36 @@ func (r *imageRepository) UpdateThumbnail(ctx context.Context, id int, thumbnail
 	return nil
 }
 
+// UpdateStatus moves an image through pending -> processing -> ready|failed.
+func (r *imageRepository) UpdateStatus(ctx context.Context, id int, status string, processingError *string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE images SET status = $2, processing_error = $3, updated_at = NOW() WHERE id = $1`, id, status, processingError)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // driver never errors after a successful Exec
+		return fmt.Errorf("image with ID %d not found", id)
+	}
+	return nil
+}
+
+// CompleteProcessing records the worker's result and marks the image ready.
+func (r *imageRepository) CompleteProcessing(ctx context.Context, id int, p ProcessingResult) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE images
+		   SET status = 'ready', thumbnail_path = $2, width = $3, height = $4,
+		       metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb,
+		       processing_error = NULL, processed_at = NOW(), updated_at = NOW()
+		 WHERE id = $1`, id, p.ThumbnailPath, p.Width, p.Height, p.Metadata)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // driver never errors after a successful Exec
+		return fmt.Errorf("image with ID %d not found", id)
+	}
+	return nil
+}
+
 // Delete removes an image record by ID
 func (r *imageRepository) Delete(ctx context.Context, id int) error {
 	query := `DELETE FROM images WHERE id = $1`
@@ -220,7 +262,7 @@ func (r *imageRepository) List(ctx context.Context, pagination PaginationParams,
 
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY ` + orderBy + `
@@ -236,7 +278,7 @@ func (r *imageRepository) ListByContentType(ctx context.Context, contentType str
 
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		WHERE content_type = $1
@@ -306,7 +348,7 @@ func (r *imageRepository) Search(ctx context.Context, filters SearchFilters, pag
 
 	query := fmt.Sprintf(`
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		%s
@@ -325,7 +367,7 @@ func (r *imageRepository) GetByDateRange(ctx context.Context, start, end time.Ti
 
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		WHERE uploaded_at >= $1 AND uploaded_at <= $2
@@ -344,7 +386,7 @@ func (r *imageRepository) GetRecent(ctx context.Context, since time.Time, limit 
 
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		WHERE uploaded_at >= $1
@@ -361,7 +403,7 @@ func (r *imageRepository) GetLargest(ctx context.Context, pagination PaginationP
 
 	query := `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY file_size DESC
@@ -494,6 +536,9 @@ func (r *imageRepository) GetWithTags(ctx context.Context, pagination Pagination
 			&image.FileSize,
 			&image.StoragePath,
 			&image.ThumbnailPath,
+			&image.Status,
+			&image.ProcessingError,
+			&image.ProcessedAt,
 			&image.Width,
 			&image.Height,
 			&image.UploadedAt,
@@ -585,7 +630,7 @@ func (r *imageRepository) GetByTags(ctx context.Context, tags []string, matchAll
 		// Images must have ALL specified tags
 		query = `
 			SELECT DISTINCT i.id, i.filename, i.original_filename, i.content_type, i.file_size,
-				   i.storage_path, i.thumbnail_path, i.width, i.height, i.uploaded_at,
+				   i.storage_path, i.thumbnail_path, i.status, i.processing_error, i.processed_at, i.width, i.height, i.uploaded_at,
 				   i.metadata, i.created_at, i.updated_at
 			FROM images i
 			WHERE EXISTS (
@@ -603,7 +648,7 @@ func (r *imageRepository) GetByTags(ctx context.Context, tags []string, matchAll
 		// Images must have ANY of the specified tags
 		query = `
 			SELECT DISTINCT i.id, i.filename, i.original_filename, i.content_type, i.file_size,
-				   i.storage_path, i.thumbnail_path, i.width, i.height, i.uploaded_at,
+				   i.storage_path, i.thumbnail_path, i.status, i.processing_error, i.processed_at, i.width, i.height, i.uploaded_at,
 				   i.metadata, i.created_at, i.updated_at
 			FROM images i
 			INNER JOIN image_tags it ON i.id = it.image_id
@@ -636,6 +681,9 @@ func (r *imageRepository) scanImages(ctx context.Context, query string, args ...
 			&image.FileSize,
 			&image.StoragePath,
 			&image.ThumbnailPath,
+			&image.Status,
+			&image.ProcessingError,
+			&image.ProcessedAt,
 			&image.Width,
 			&image.Height,
 			&image.UploadedAt,
@@ -690,7 +738,7 @@ func buildSimpleOrderByClause(sort SortParams) string {
 const (
 	getImagesOnlyQueryUploadedAtAsc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY uploaded_at ASC
@@ -698,7 +746,7 @@ const (
 
 	getImagesOnlyQueryUploadedAtDesc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY uploaded_at DESC
@@ -706,7 +754,7 @@ const (
 
 	getImagesOnlyQueryFilenameAsc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY filename ASC
@@ -714,7 +762,7 @@ const (
 
 	getImagesOnlyQueryFilenameDesc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY filename DESC
@@ -722,7 +770,7 @@ const (
 
 	getImagesOnlyQueryFileSizeAsc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY file_size ASC
@@ -730,7 +778,7 @@ const (
 
 	getImagesOnlyQueryFileSizeDesc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY file_size DESC
@@ -738,7 +786,7 @@ const (
 
 	getImagesOnlyQueryCreatedAtAsc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY created_at ASC
@@ -746,7 +794,7 @@ const (
 
 	getImagesOnlyQueryCreatedAtDesc = `
 		SELECT id, filename, original_filename, content_type, file_size,
-			   storage_path, thumbnail_path, width, height, uploaded_at,
+			   storage_path, thumbnail_path, status, processing_error, processed_at, width, height, uploaded_at,
 			   metadata, created_at, updated_at
 		FROM images
 		ORDER BY created_at DESC

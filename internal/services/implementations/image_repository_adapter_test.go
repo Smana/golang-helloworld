@@ -62,6 +62,16 @@ func (m *MockDatabaseImageRepository) UpdateThumbnail(ctx context.Context, id in
 	return args.Error(0)
 }
 
+func (m *MockDatabaseImageRepository) UpdateStatus(ctx context.Context, id int, status string, processingError *string) error {
+	args := m.Called(ctx, id, status, processingError)
+	return args.Error(0)
+}
+
+func (m *MockDatabaseImageRepository) CompleteProcessing(ctx context.Context, id int, p database.ProcessingResult) error {
+	args := m.Called(ctx, id, p)
+	return args.Error(0)
+}
+
 func (m *MockDatabaseImageRepository) Delete(ctx context.Context, id int) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
