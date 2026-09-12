@@ -103,8 +103,9 @@ curl -X PUT http://localhost:8080/api/settings/demo \
 ```
 
 `GET /api/settings/demo` reads the current controls, and `POST /api/settings/demo/reset` turns
-everything back off. Every injected fault sets the span attribute `demo.fault=<type>`, logs a
-`warn` line, and increments `demo.faults.injected`. Only `/api/*` requests are faulted at all, and
+everything back off. Every injected fault sets the span attribute `demo.fault=<type>` (the latest
+fault, when a request draws more than one) and adds a span event carrying it, logs a `warn` line,
+and increments `demo.faults.injected`. Only `/api/*` requests are faulted at all, and
 `/api/settings/demo*` is exempt within that, so a fault can always be switched off.
 
 ## 📈 Load generator

@@ -61,6 +61,20 @@ func (h *harness) faultAttrs() []string {
 	return out
 }
 
+func (h *harness) faultEvents() []string {
+	var out []string
+	spans := h.spans.GetSpans()
+	for i := range spans {
+		for _, e := range spans[i].Events {
+			set := attribute.NewSet(e.Attributes...)
+			if v, ok := set.Value("demo.fault"); ok {
+				out = append(out, v.AsString())
+			}
+		}
+	}
+	return out
+}
+
 func TestLatencyThenErrorCarryAllThreeMarkers(t *testing.T) {
 	h := newHarness(demo.Controls{LatencyMS: 800, LatencyProbability: 0.5, LatencyRoutes: []string{"/api/images"}, ErrorProbability: 0.5}, 0.3)
 	rec := h.do("/api/images/7")
@@ -70,8 +84,11 @@ func TestLatencyThenErrorCarryAllThreeMarkers(t *testing.T) {
 	if len(h.slept) != 1 || h.slept[0] != 800*time.Millisecond {
 		t.Fatalf("slept = %v", h.slept)
 	}
-	if got := h.faultAttrs(); len(got) != 1 || got[0] != demo.FaultError { // the last fault wins on the span
+	if got := h.faultAttrs(); len(got) != 1 || got[0] != demo.FaultError { // the attribute holds the last fault
 		t.Fatalf("span demo.fault = %v", got)
+	}
+	if got := h.faultEvents(); strings.Join(got, ",") != demo.FaultLatency+","+demo.FaultError {
+		t.Fatalf("span demo.fault events = %v, want every fault in order", got)
 	}
 	if c := strings.Count(h.logs.String(), "demo fault injected"); c != 2 {
 		t.Fatalf("log lines = %d, want 2:\n%s", c, h.logs.String())

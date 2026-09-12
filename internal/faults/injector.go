@@ -69,7 +69,11 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 }
 
 func (i *Injector) record(ctx context.Context, fault string) {
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String(obs.AttrDemoFault, fault))
+	// The attribute keeps the latest fault, so demo.fault=<type> stays a plain
+	// string to query; the event keeps every fault when one request draws more.
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.String(obs.AttrDemoFault, fault))
+	span.AddEvent("demo fault injected", trace.WithAttributes(attribute.String(obs.AttrDemoFault, fault)))
 	i.faults.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrDemoFault, fault)))
 	if i.log != nil {
 		i.log.Warn(ctx).Str(obs.AttrDemoFault, fault).Msg("demo fault injected")

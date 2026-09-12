@@ -199,8 +199,10 @@ faults for the observability demo. The endpoints exist while `DEMO_CONTROLS_ENAB
 | Worker failure | A job fails with probability `worker_failure_probability`: it retries, then dead-letters |
 | Worker slowdown | A processing delay (`worker_delay_ms`), so the queue grows |
 
-Every injected fault sets the span attribute `demo.fault=<type>`, logs a `warn` line ("demo fault
-injected"), and increments `demo.faults.injected`. Only `/api/*` requests are faulted at all, and
+Every injected fault sets the span attribute `demo.fault=<type>`, adds a span event "demo fault
+injected" carrying the same attribute, logs a `warn` line ("demo fault injected"), and increments
+`demo.faults.injected`. When one request draws several faults (latency, then an error) the
+attribute holds the latest and the events list all of them in order. Only `/api/*` requests are faulted at all, and
 `/api/settings/demo*` is exempt within that, so a fault can always be switched off.
 
 ## Logging
