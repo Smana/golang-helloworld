@@ -2,6 +2,7 @@ package implementations
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -87,32 +88,47 @@ func (s *StorageServiceImpl) StoreAt(ctx context.Context, path, contentType stri
 	return err
 }
 
-// countingReadCloser reports the bytes actually read on Close.
+// countingReadCloser reports the bytes read, and the first read or close
+// error, once, on the first Close.
 type countingReadCloser struct {
 	io.ReadCloser
-	n      int64
-	onDone func(int64)
+	n       int64
+	readErr error
+	closed  bool
+	onClose func(n int64, err error)
 }
 
 func (c *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	c.n += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) && c.readErr == nil {
+		c.readErr = err
+	}
 	return n, err
 }
 
 func (c *countingReadCloser) Close() error {
-	c.onDone(c.n)
-	return c.ReadCloser.Close()
+	err := c.ReadCloser.Close()
+	if !c.closed {
+		c.closed = true
+		c.onClose(c.n, errors.Join(c.readErr, err))
+	}
+	return err
 }
 
+// Retrieve ends its storage.get span when the caller closes the reader, so the
+// span and storage.operation.duration cover the transfer, not just the open.
 func (s *StorageServiceImpl) Retrieve(ctx context.Context, path string) (io.ReadCloser, error) {
 	ctx, done := s.observe(ctx, "get", path)
 	rc, err := s.service.Retrieve(ctx, path)
-	done(err)
 	if err != nil {
+		done(err)
 		return nil, err
 	}
-	return &countingReadCloser{ReadCloser: rc, onDone: func(n int64) { s.addBytes(ctx, "read", n) }}, nil
+	return &countingReadCloser{ReadCloser: rc, onClose: func(n int64, err error) {
+		s.addBytes(ctx, "read", n)
+		done(err)
+	}}, nil
 }
 
 func (s *StorageServiceImpl) Delete(ctx context.Context, path string) error {

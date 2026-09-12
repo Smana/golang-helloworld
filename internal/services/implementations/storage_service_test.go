@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"io"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +33,42 @@ func tinyPNG(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func TestStorageGetSpanCoversTheWholeRead(t *testing.T) {
+	ctx := context.Background()
+	exp := tracetest.NewInMemoryExporter()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp)))
+	svc, err := storage.NewService(&config.StorageConfig{BucketName: "b", MaxUploadSize: 10 << 20}, storetest.NewMemStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewStorageService(svc)
+	data := tinyPNG(t)
+	path, err := s.Store(ctx, "cat.png", "image/png", bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const transfer = 50 * time.Millisecond
+	rc, err := s.Retrieve(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(transfer) // bytes are still moving
+	_, _ = io.Copy(io.Discard, rc)
+	_ = rc.Close()
+	_ = rc.Close() // a second Close must not end the span again
+
+	var gets []time.Duration
+	for _, sp := range exp.GetSpans() {
+		if sp.Name == "storage.get" {
+			gets = append(gets, sp.EndTime.Sub(sp.StartTime))
+		}
+	}
+	if len(gets) != 1 || gets[0] < transfer {
+		t.Fatalf("storage.get spans = %v, want one lasting at least %v", gets, transfer)
+	}
 }
 
 func TestStorageServiceEmitsUniformTelemetry(t *testing.T) {
