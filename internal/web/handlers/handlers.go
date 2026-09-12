@@ -475,7 +475,7 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
                             <label>Error probability (5xx)<input id="demoErrorProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
                             <label>Slow DB list query (ms)<input id="demoSlowDbMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
                             <label>Worker failure probability<input id="demoWorkerFailProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
-                            <label>Worker delay (ms)<input id="demoWorkerDelayMs" type="number" min="0" max="60000" class="w-full border rounded px-2 py-1"></label>
+                            <label>Worker delay (ms)<input id="demoWorkerDelayMs" type="number" min="0" max="10000" class="w-full border rounded px-2 py-1"></label>
                         </div>
                         <div class="flex gap-2 mt-3">
                             <button onclick="saveDemoControls()" class="bg-amber-600 hover:bg-amber-700 text-white py-1 px-3 rounded">Apply</button>
