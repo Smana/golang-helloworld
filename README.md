@@ -193,10 +193,6 @@ make dev                    # Hot reload development
 make test                   # Run tests
 make lint                   # Code linting
 
-# Dagger CI (containerized)
-make dagger-ci              # Run complete CI pipeline locally
-make install-tools          # Install Dagger and other tools
-
 # Release
 make release                # Prepare and validate for release
 

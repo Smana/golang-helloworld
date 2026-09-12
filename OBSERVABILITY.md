@@ -441,8 +441,8 @@ If observability is causing performance issues:
 
 1. **Reduce trace sampling**:
 ```bash
-# Sample 10% of traces (configure in future iteration)
-OTEL_TRACES_SAMPLER=traceidratio
+# Sample 10% of root traces; child spans follow their parent's decision
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
 OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 

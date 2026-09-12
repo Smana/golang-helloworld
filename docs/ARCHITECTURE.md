@@ -10,22 +10,29 @@ The Image Gallery follows **Clean Architecture** principles with clear separatio
 graph TB
     subgraph "External"
         User[User/Browser]
-        S3[S3 Storage<br/>MinIO/AWS]
+        S3[Object Storage<br/>S3/MinIO or GCS]
         DB[(PostgreSQL<br/>Database)]
         Cache[(Valkey<br/>Cache)]
+        Jobs[(Valkey stream<br/>image-gallery:jobs)]
     end
     
     subgraph "Application Layers"
-        subgraph "Web Layer"
+        subgraph "Web Layer (serve)"
             HTTP[HTTP Handlers<br/>Chi Router]
-            MW[Middleware<br/>Auth, CORS, etc.]
+            MW[Middleware<br/>tracing, metrics, recovery]
         end
         
         subgraph "Service Layer"
             IS[Image Service]
             CS[Cache Service]
             SS[Storage Service]
+            JP[Job Publisher]
             Container[DI Container]
+        end
+        
+        subgraph "Worker Role (worker)"
+            Consumer[Queue Consumer<br/>group: workers]
+            Proc[Processor<br/>thumbnail + metadata]
         end
         
         subgraph "Domain Layer"
@@ -49,12 +56,20 @@ graph TB
     IS --> Models
     IS --> CS
     IS --> SS
+    IS --> ImageRepo
+    IS --> JP
     CS --> Cache
     SS --> S3
     ImageRepo --> DB
+    JP -->|XADD| Jobs
+    Jobs -->|XREADGROUP| Consumer
+    Consumer --> Proc
+    Proc --> SS
+    Proc --> ImageRepo
     Container --> IS
     Container --> CS
     Container --> SS
+    Container --> JP
 ```
 
 ## 🎯 Design Principles
@@ -350,19 +365,24 @@ sequenceDiagram
     participant St as Storage
     participant Ca as Cache
     participant DB as Database
+    participant Q as Valkey stream
     
     C->>H: POST /api/images
-    H->>S: UploadImage(request)
-    S->>St: Upload file to S3/MinIO
+    H->>S: CreateImage(request)
+    S->>St: Upload file to S3/MinIO or GCS
     St-->>S: Storage path
     S->>R: Create image record
-    R->>DB: INSERT image
+    R->>DB: INSERT image, status=pending
     DB-->>R: Image with ID
     R-->>S: Image entity
     S->>Ca: Invalidate cache
     Ca-->>S: Success
+    S->>Q: XADD image-gallery:jobs (enqueue processing)
+    alt Enqueue fails, or no queue is configured
+        S->>R: UpdateStatus(failed)
+    end
     S-->>H: Image response
-    H-->>C: JSON response
+    H-->>C: 201 JSON response (does not wait for the worker)
 ```
 
 ### Get Image Flow (with Cache)
