@@ -33,6 +33,7 @@ type ImageServiceImpl struct {
 	cache     image.CacheService        // can be nil
 	jobs      image.JobPublisher        // can be nil
 	slowDB    func(ctx context.Context) // demo "slow DB" hook, can be nil
+	log       *obs.Logger               // can be nil
 
 	// Observability
 	tracer       trace.Tracer
@@ -83,6 +84,9 @@ func (s *ImageServiceImpl) SetJobPublisher(p image.JobPublisher) { s.jobs = p }
 // that reaches the database (not on a cache hit).
 func (s *ImageServiceImpl) SetSlowDB(f func(ctx context.Context)) { s.slowDB = f }
 
+// SetLogger installs the logger for failures the request itself does not report.
+func (s *ImageServiceImpl) SetLogger(l *obs.Logger) { s.log = l }
+
 // errNoJobQueue is the enqueue failure when no publisher is configured (a web
 // role started without Valkey).
 var errNoJobQueue = errors.New("no job queue configured")
@@ -96,13 +100,22 @@ func (s *ImageServiceImpl) enqueueProcessing(ctx context.Context, img *image.Ima
 	if s.jobs != nil {
 		err = s.jobs.PublishProcessImage(ctx, img.ID, img.StoragePath)
 	}
-	if err != nil {
-		trace.SpanFromContext(ctx).RecordError(err)
-		msg := "enqueue failed: " + err.Error()
-		if uErr := s.imageRepo.UpdateStatus(ctx, img.ID, image.StatusFailed, &msg); uErr == nil {
-			img.Status, img.ProcessingError = image.StatusFailed, &msg
-		}
+	if err == nil {
+		return
 	}
+	span := trace.SpanFromContext(ctx)
+	span.RecordError(err)
+	msg := "enqueue failed: " + err.Error()
+	if uErr := s.imageRepo.UpdateStatus(ctx, img.ID, image.StatusFailed, &msg); uErr != nil {
+		// The row stays pending with nothing left to process it.
+		uErr = fmt.Errorf("mark image failed after enqueue failure: %w", uErr)
+		span.RecordError(uErr)
+		if s.log != nil {
+			s.log.Error(ctx).Int(obs.AttrImageID, img.ID).Err(uErr).Msg("image left pending")
+		}
+		return
+	}
+	img.Status, img.ProcessingError = image.StatusFailed, &msg
 }
 
 // CreateImage handles the complete image creation process

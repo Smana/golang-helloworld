@@ -180,6 +180,9 @@ func (c *Container) initializeServices() error {
 		c.eventPublisher,
 		c.cacheService,
 	)
+	if s, ok := c.imageService.(interface{ SetLogger(*observability.Logger) }); ok {
+		s.SetLogger(c.logger)
+	}
 
 	c.tagService = implementations.NewTagService(
 		c.tagRepository,

@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
+	"image-gallery/internal/observability"
 	"image-gallery/internal/platform/storage"
 	"image-gallery/internal/platform/storage/storetest"
 )
@@ -61,7 +67,14 @@ func (p *fakePublisher) PublishProcessImage(_ context.Context, id int, key strin
 	return p.err
 }
 
-func newAsyncService(t *testing.T, repo *fakeRepo, pub image.JobPublisher) image.ImageService {
+// statusDownRepo cannot update a status, as when Postgres fails mid-request.
+type statusDownRepo struct{ *fakeRepo }
+
+func (statusDownRepo) UpdateStatus(context.Context, int, string, *string) error {
+	return errors.New("postgres down")
+}
+
+func newAsyncService(t *testing.T, repo image.Repository, pub image.JobPublisher) image.ImageService {
 	t.Helper()
 	svc, err := storage.NewService(&config.StorageConfig{BucketName: "b", MaxUploadSize: 10 << 20}, storetest.NewMemStore())
 	if err != nil {
@@ -119,5 +132,40 @@ func TestCreateImageMarksFailedWhenEnqueueFails(t *testing.T) {
 	stored := repo.byID[img.ID]
 	if img.Status != image.StatusFailed || stored.Status != image.StatusFailed || stored.ProcessingError == nil {
 		t.Fatalf("want failed with an error message, got %+v", stored)
+	}
+}
+
+// TestCreateImageReportsAnUnrecordedFailure covers the error path of the error path: the
+// publish fails and marking the image failed fails too, so the row stays pending. That
+// second error must reach the span and the log rather than vanish.
+func TestCreateImageReportsAnUnrecordedFailure(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp)))
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	var logs bytes.Buffer
+
+	s := newAsyncService(t, statusDownRepo{newFakeRepo()}, &fakePublisher{err: errors.New("valkey down")})
+	s.(*ImageServiceImpl).SetLogger(observability.NewLoggerTo(&logs, observability.Config{}))
+	data := tinyPNG(t)
+	if _, err := s.CreateImage(context.Background(), createReq(data), bytes.NewReader(data)); err != nil {
+		t.Fatalf("the upload itself succeeded, got %v", err)
+	}
+
+	var recorded bool
+	for _, span := range exp.GetSpans() {
+		for _, ev := range span.Events {
+			for _, kv := range ev.Attributes {
+				if kv.Key == "exception.message" && strings.Contains(kv.Value.AsString(), "postgres down") {
+					recorded = true
+				}
+			}
+		}
+	}
+	if !recorded {
+		t.Errorf("the failed status update is not recorded on any span")
+	}
+	if !strings.Contains(logs.String(), "postgres down") {
+		t.Errorf("the failed status update is not logged; log output: %q", logs.String())
 	}
 }
