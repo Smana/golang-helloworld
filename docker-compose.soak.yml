@@ -27,7 +27,6 @@ services:
     mem_limit: 512m
     environment:
       - GO_ENV=development
-      - OTEL_SERVICE_NAME=image-gallery-worker
       - DATABASE_URL=postgres://testuser:testpass@postgres:5432/image_gallery_test?sslmode=disable # pragma: allowlist secret
       - STORAGE_PROVIDER=s3
       - STORAGE_ENDPOINT=minio:9000

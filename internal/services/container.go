@@ -148,7 +148,8 @@ func (c *Container) initializeServices() error {
 	}
 	// The worker writes image status directly through imageRepoAdapter,
 	// bypassing ImageService's own cache invalidation; wire it here too so a
-	// list cached mid-processing does not stay stale until its TTL expires.
+	// list or single image cached mid-processing does not stay stale until
+	// its TTL expires.
 	if c.cacheService != nil {
 		if adapter, ok := imageRepoAdapter.(interface {
 			SetCacheInvalidator(implementations.CacheInvalidator)

@@ -9,13 +9,16 @@ import (
 	"image-gallery/internal/platform/database"
 )
 
-// CacheInvalidator drops cached list views. The worker writes image status
-// directly through this adapter (UpdateStatus, CompleteProcessing), bypassing
-// ImageService's own cache invalidation on Create/Update/Delete; without this,
-// a list cached while an upload was still processing stays stale until its
-// TTL expires. A nil invalidator disables it (e.g. caching turned off).
+// CacheInvalidator drops cached views of an image. The worker writes image
+// status directly through this adapter (UpdateStatus, CompleteProcessing),
+// bypassing ImageService's own cache invalidation on Create/Update/Delete;
+// without this, a list cached while an upload was still processing stays
+// stale until its 30-minute TTL, and a single image fetched (GetImage) while
+// still processing stays stale until its 1-hour TTL. A nil invalidator
+// disables both (e.g. caching turned off).
 type CacheInvalidator interface {
 	InvalidateImageLists(ctx context.Context) error
+	DeleteImage(ctx context.Context, id int) error
 }
 
 // ImageRepositoryAdapter adapts database ImageRepository to domain Repository interface
@@ -38,19 +41,21 @@ func (a *ImageRepositoryAdapter) SetTagRepository(tagRepo database.TagRepository
 	a.tagRepo = tagRepo
 }
 
-// SetCacheInvalidator wires list-cache invalidation for the worker's direct
-// status writes; see CacheInvalidator.
+// SetCacheInvalidator wires list-cache and single-image cache invalidation
+// for the worker's direct status writes; see CacheInvalidator.
 func (a *ImageRepositoryAdapter) SetCacheInvalidator(cache CacheInvalidator) {
 	a.cache = cache
 }
 
-// invalidateLists best-effort drops cached list views: a failure here must
-// not fail the status write it follows, so any error is discarded.
-func (a *ImageRepositoryAdapter) invalidateLists(ctx context.Context) {
+// invalidateCaches best-effort drops both the list cache and the single-image
+// cache entry for id: a failure here must not fail the status write it
+// follows, so any error is discarded.
+func (a *ImageRepositoryAdapter) invalidateCaches(ctx context.Context, id int) {
 	if a.cache == nil {
 		return
 	}
 	_ = a.cache.InvalidateImageLists(ctx) //nolint:errcheck // best-effort; a stale cached list expires within its TTL anyway
+	_ = a.cache.DeleteImage(ctx, id)      //nolint:errcheck // best-effort; a stale cached image expires within its TTL anyway
 }
 
 func (a *ImageRepositoryAdapter) Create(ctx context.Context, img *image.Image) error {
@@ -248,7 +253,7 @@ func (a *ImageRepositoryAdapter) UpdateStatus(ctx context.Context, id int, statu
 	if err := a.dbRepo.UpdateStatus(ctx, id, status, processingError); err != nil {
 		return err
 	}
-	a.invalidateLists(ctx)
+	a.invalidateCaches(ctx, id)
 	return nil
 }
 
@@ -259,7 +264,7 @@ func (a *ImageRepositoryAdapter) CompleteProcessing(ctx context.Context, id int,
 	}); err != nil {
 		return err
 	}
-	a.invalidateLists(ctx)
+	a.invalidateCaches(ctx, id)
 	return nil
 }
 

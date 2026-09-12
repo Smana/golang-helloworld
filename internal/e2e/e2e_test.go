@@ -129,6 +129,9 @@ func TestEndToEndTraceAndInstrumentContract(t *testing.T) {
 	// the mixed scenario's own delete pool) so the contract assertion below is
 	// deterministic rather than flaky.
 	get(t, srv.URL+"/api/settings")
+	if len(readyIDs) == 0 {
+		t.Fatal("no ready image IDs to delete")
+	}
 	del(t, fmt.Sprintf("%s/api/images/%d", srv.URL, readyIDs[0]))
 
 	stopWorker()

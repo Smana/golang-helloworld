@@ -47,6 +47,7 @@ Thumbs.db
 # Logs
 *.log
 build-errors.log
+soak-logs.txt
 
 # Air (hot reload)
 /tmp/

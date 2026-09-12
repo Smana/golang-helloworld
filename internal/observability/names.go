@@ -1,9 +1,9 @@
 package observability
 
-// Telemetry contract. Every metric name the application emits is one of these
-// constants; sub-project 2 builds its dashboards and rules on them, and
-// internal/e2e.TestInstrumentNamesContract fails when one drifts. Keep in step
-// with the table in OBSERVABILITY.md.
+// Telemetry contract. Every metric name the application emits is one of
+// these constants; sub-project 2 builds its dashboards and rules on them,
+// and internal/e2e.TestEndToEndTraceAndInstrumentContract fails when one
+// drifts. Keep in step with the table in OBSERVABILITY.md.
 const (
 	MetricHTTPServerDuration = "http.server.request.duration"
 	MetricHTTPServerActive   = "http.server.active_requests"
