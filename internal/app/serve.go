@@ -44,9 +44,9 @@ func RunServe(ctx context.Context) error {
 
 // wireJobPublisher attaches the Valkey-backed job publisher when a Redis
 // connection is configured and reachable. Never fails the web role: without a
-// publisher, ImageServiceImpl.enqueueProcessing no-ops on upload (the image
-// stays "pending" for a worker to pick up later) instead of erroring, so a
-// missing or unreachable Valkey must not stop the server from serving.
+// publisher, uploads still succeed and ImageServiceImpl.enqueueProcessing marks
+// each image failed (nothing would ever process it), so a missing or
+// unreachable Valkey must not stop the server from serving.
 func wireJobPublisher(d *Deps, container *services.Container, log *zerolog.Logger) {
 	if d.Redis == nil {
 		log.Warn().Msg("Valkey not available; asynchronous image processing is disabled for this run")

@@ -58,7 +58,7 @@ Locally, run web and worker as two processes sharing the same Postgres, storage 
 ./bin/image-gallery worker   # terminal 2 — needs CACHE_ENABLED=true and a reachable Valkey
 ```
 
-Without Valkey, `serve` still serves uploads — the image stays `pending` until a worker can process it.
+Without Valkey, `serve` still accepts uploads, but no job can be queued, so each image is marked `failed` ("enqueue failed: no job queue configured") and shows its original instead of a thumbnail.
 
 ## ⚙️ Environment
 

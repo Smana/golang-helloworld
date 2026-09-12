@@ -91,20 +91,21 @@ func TestCreateImageIsPendingAndEnqueued(t *testing.T) {
 	}
 }
 
-// TestCreateImageStaysPendingWithoutJobPublisher pins the contract R29 relies
+// TestCreateImageMarksFailedWithoutJobPublisher pins the contract R29 relies
 // on: a web role bootstrapped with no Valkey (CACHE_ENABLED=false, or Valkey
-// simply unreachable) must still accept uploads. With no job publisher set,
-// enqueueProcessing no-ops and the image is left "pending" for a worker to
-// pick up later, instead of the request failing.
-func TestCreateImageStaysPendingWithoutJobPublisher(t *testing.T) {
+// simply unreachable) must still accept uploads. No job is ever published for
+// such an image and nothing rescans pending rows, so it is marked failed, the
+// same as when a publish fails, rather than left pending forever.
+func TestCreateImageMarksFailedWithoutJobPublisher(t *testing.T) {
 	repo := newFakeRepo()
 	data := tinyPNG(t)
 	img, err := newAsyncService(t, repo, nil).CreateImage(context.Background(), createReq(data), bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("upload with no job publisher configured should still succeed, got %v", err)
 	}
-	if img.Status != image.StatusPending || repo.byID[img.ID].Status != image.StatusPending {
-		t.Fatalf("status = %q (stored %q), want pending", img.Status, repo.byID[img.ID].Status)
+	stored := repo.byID[img.ID]
+	if img.Status != image.StatusFailed || stored.Status != image.StatusFailed || stored.ProcessingError == nil {
+		t.Fatalf("want failed with an error message, got %+v", stored)
 	}
 }
 

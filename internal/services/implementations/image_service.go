@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -82,13 +83,20 @@ func (s *ImageServiceImpl) SetJobPublisher(p image.JobPublisher) { s.jobs = p }
 // that reaches the database (not on a cache hit).
 func (s *ImageServiceImpl) SetSlowDB(f func(ctx context.Context)) { s.slowDB = f }
 
+// errNoJobQueue is the enqueue failure when no publisher is configured (a web
+// role started without Valkey).
+var errNoJobQueue = errors.New("no job queue configured")
+
 // enqueueProcessing hands the image to the worker. The upload has already
-// succeeded, so an enqueue failure marks the image failed rather than failing the request.
+// succeeded, so an enqueue failure marks the image failed rather than failing
+// the request. Having no queue at all is the same failure: nothing rescans
+// pending rows, so the image would otherwise stay pending forever.
 func (s *ImageServiceImpl) enqueueProcessing(ctx context.Context, img *image.Image) {
-	if s.jobs == nil {
-		return // no queue configured (local run without Valkey): the image stays pending
+	err := errNoJobQueue
+	if s.jobs != nil {
+		err = s.jobs.PublishProcessImage(ctx, img.ID, img.StoragePath)
 	}
-	if err := s.jobs.PublishProcessImage(ctx, img.ID, img.StoragePath); err != nil {
+	if err != nil {
 		trace.SpanFromContext(ctx).RecordError(err)
 		msg := "enqueue failed: " + err.Error()
 		if uErr := s.imageRepo.UpdateStatus(ctx, img.ID, image.StatusFailed, &msg); uErr == nil {
