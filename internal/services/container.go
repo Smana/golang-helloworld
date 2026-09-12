@@ -146,6 +146,16 @@ func (c *Container) initializeServices() error {
 		c.redisClient = nil
 		c.cacheService = nil
 	}
+	// The worker writes image status directly through imageRepoAdapter,
+	// bypassing ImageService's own cache invalidation; wire it here too so a
+	// list cached mid-processing does not stay stale until its TTL expires.
+	if c.cacheService != nil {
+		if adapter, ok := imageRepoAdapter.(interface {
+			SetCacheInvalidator(implementations.CacheInvalidator)
+		}); ok {
+			adapter.SetCacheInvalidator(c.cacheService)
+		}
+	}
 
 	// Initialize optional services (can be nil for now)
 	c.eventPublisher = nil      // Will implement later

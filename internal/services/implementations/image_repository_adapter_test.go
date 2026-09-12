@@ -418,6 +418,83 @@ func TestImageRepositoryAdapter_Delete(t *testing.T) {
 	})
 }
 
+// mockCacheInvalidator is a mock implementation of CacheInvalidator.
+type mockCacheInvalidator struct {
+	mock.Mock
+}
+
+func (m *mockCacheInvalidator) InvalidateImageLists(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func TestImageRepositoryAdapter_CacheInvalidation(t *testing.T) {
+	t.Run("UpdateStatus success invalidates the list cache", func(t *testing.T) {
+		mockDB := &MockDatabaseImageRepository{}
+		mockCache := &mockCacheInvalidator{}
+		adapter := NewImageRepositoryAdapter(mockDB).(*ImageRepositoryAdapter)
+		adapter.SetCacheInvalidator(mockCache)
+		ctx := context.Background()
+
+		mockDB.On("UpdateStatus", ctx, 1, "ready", (*string)(nil)).Return(nil)
+		mockCache.On("InvalidateImageLists", ctx).Return(nil)
+
+		err := adapter.UpdateStatus(ctx, 1, "ready", nil)
+
+		assert.NoError(t, err)
+		mockDB.AssertExpectations(t)
+		mockCache.AssertExpectations(t)
+	})
+
+	t.Run("UpdateStatus failure does not invalidate the list cache", func(t *testing.T) {
+		mockDB := &MockDatabaseImageRepository{}
+		mockCache := &mockCacheInvalidator{}
+		adapter := NewImageRepositoryAdapter(mockDB).(*ImageRepositoryAdapter)
+		adapter.SetCacheInvalidator(mockCache)
+		ctx := context.Background()
+
+		dbErr := errors.New("db unavailable")
+		mockDB.On("UpdateStatus", ctx, 1, "ready", (*string)(nil)).Return(dbErr)
+
+		err := adapter.UpdateStatus(ctx, 1, "ready", nil)
+
+		assert.ErrorIs(t, err, dbErr)
+		mockDB.AssertExpectations(t)
+		mockCache.AssertNotCalled(t, "InvalidateImageLists", mock.Anything)
+	})
+
+	t.Run("CompleteProcessing success invalidates the list cache", func(t *testing.T) {
+		mockDB := &MockDatabaseImageRepository{}
+		mockCache := &mockCacheInvalidator{}
+		adapter := NewImageRepositoryAdapter(mockDB).(*ImageRepositoryAdapter)
+		adapter.SetCacheInvalidator(mockCache)
+		ctx := context.Background()
+
+		result := image.ProcessingResult{ThumbnailPath: "thumbnails/1.jpg", Width: 100, Height: 200}
+		mockDB.On("CompleteProcessing", ctx, 1, mock.AnythingOfType("database.ProcessingResult")).Return(nil)
+		mockCache.On("InvalidateImageLists", ctx).Return(nil)
+
+		err := adapter.CompleteProcessing(ctx, 1, result)
+
+		assert.NoError(t, err)
+		mockDB.AssertExpectations(t)
+		mockCache.AssertExpectations(t)
+	})
+
+	t.Run("no invalidator wired is a no-op", func(t *testing.T) {
+		mockDB := &MockDatabaseImageRepository{}
+		adapter := NewImageRepositoryAdapter(mockDB).(*ImageRepositoryAdapter)
+		ctx := context.Background()
+
+		mockDB.On("UpdateStatus", ctx, 1, "ready", (*string)(nil)).Return(nil)
+
+		err := adapter.UpdateStatus(ctx, 1, "ready", nil)
+
+		assert.NoError(t, err)
+		mockDB.AssertExpectations(t)
+	})
+}
+
 func TestImageRepositoryAdapter_ExistsByFilename(t *testing.T) {
 	t.Run("Exists", func(t *testing.T) {
 		// Given: A mock database repository with an existing image

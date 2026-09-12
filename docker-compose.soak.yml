@@ -1,0 +1,46 @@
+# Soak overlay: app and worker under container memory limits, exporting at
+# 100 % sampling to local VictoriaMetrics + VictoriaTraces.
+#   docker compose -f docker-compose.yml -f docker-compose.soak.yml up -d --build
+services:
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:v1.151.0
+    container_name: image-gallery-vm
+    ports: ["8428:8428"]
+  victoria-traces:
+    image: victoriametrics/victoria-traces:v0.11.0
+    container_name: image-gallery-vt
+    ports: ["10428:10428"]
+  app:
+    mem_limit: 1g
+    environment: &otel
+      - STORAGE_PROVIDER=s3
+      - OTEL_TRACES_ENABLED=true
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://victoria-traces:10428/insert/opentelemetry/v1/traces
+      - OTEL_METRICS_ENABLED=true
+      - OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://victoria-metrics:8428/opentelemetry/v1/metrics
+    depends_on: [victoria-metrics, victoria-traces]
+  worker:
+    build: { context: ., dockerfile: Dockerfile }
+    container_name: image-gallery-worker
+    command: ["worker"]
+    mem_limit: 512m
+    environment:
+      - GO_ENV=development
+      - OTEL_SERVICE_NAME=image-gallery-worker
+      - DATABASE_URL=postgres://testuser:testpass@postgres:5432/image_gallery_test?sslmode=disable # pragma: allowlist secret
+      - STORAGE_PROVIDER=s3
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+      - STORAGE_BUCKET=images
+      - STORAGE_USE_SSL=false
+      - STORAGE_REGION=us-east-1
+      - CACHE_ENABLED=true
+      - CACHE_ADDRESS=valkey:6379
+      - OTEL_TRACES_ENABLED=true
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://victoria-traces:10428/insert/opentelemetry/v1/traces
+      - OTEL_METRICS_ENABLED=true
+      - OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://victoria-metrics:8428/opentelemetry/v1/metrics
+    depends_on: [postgres, minio, valkey, victoria-metrics, victoria-traces]

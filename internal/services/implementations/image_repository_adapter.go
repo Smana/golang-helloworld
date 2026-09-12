@@ -9,10 +9,20 @@ import (
 	"image-gallery/internal/platform/database"
 )
 
+// CacheInvalidator drops cached list views. The worker writes image status
+// directly through this adapter (UpdateStatus, CompleteProcessing), bypassing
+// ImageService's own cache invalidation on Create/Update/Delete; without this,
+// a list cached while an upload was still processing stays stale until its
+// TTL expires. A nil invalidator disables it (e.g. caching turned off).
+type CacheInvalidator interface {
+	InvalidateImageLists(ctx context.Context) error
+}
+
 // ImageRepositoryAdapter adapts database ImageRepository to domain Repository interface
 type ImageRepositoryAdapter struct {
 	dbRepo  database.ImageRepository
 	tagRepo database.TagRepository
+	cache   CacheInvalidator
 }
 
 // NewImageRepositoryAdapter creates a domain repository adapter
@@ -26,6 +36,21 @@ func NewImageRepositoryAdapter(dbRepo database.ImageRepository) image.Repository
 // SetTagRepository sets the tag repository for handling tag relationships
 func (a *ImageRepositoryAdapter) SetTagRepository(tagRepo database.TagRepository) {
 	a.tagRepo = tagRepo
+}
+
+// SetCacheInvalidator wires list-cache invalidation for the worker's direct
+// status writes; see CacheInvalidator.
+func (a *ImageRepositoryAdapter) SetCacheInvalidator(cache CacheInvalidator) {
+	a.cache = cache
+}
+
+// invalidateLists best-effort drops cached list views: a failure here must
+// not fail the status write it follows, so any error is discarded.
+func (a *ImageRepositoryAdapter) invalidateLists(ctx context.Context) {
+	if a.cache == nil {
+		return
+	}
+	_ = a.cache.InvalidateImageLists(ctx) //nolint:errcheck // best-effort; a stale cached list expires within its TTL anyway
 }
 
 func (a *ImageRepositoryAdapter) Create(ctx context.Context, img *image.Image) error {
@@ -220,14 +245,22 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 }
 
 func (a *ImageRepositoryAdapter) UpdateStatus(ctx context.Context, id int, status string, processingError *string) error {
-	return a.dbRepo.UpdateStatus(ctx, id, status, processingError)
+	if err := a.dbRepo.UpdateStatus(ctx, id, status, processingError); err != nil {
+		return err
+	}
+	a.invalidateLists(ctx)
+	return nil
 }
 
 func (a *ImageRepositoryAdapter) CompleteProcessing(ctx context.Context, id int, r image.ProcessingResult) error {
-	return a.dbRepo.CompleteProcessing(ctx, id, database.ProcessingResult{
+	if err := a.dbRepo.CompleteProcessing(ctx, id, database.ProcessingResult{
 		ThumbnailPath: r.ThumbnailPath, Width: r.Width, Height: r.Height,
 		Metadata: database.Metadata{"format": r.Format, "color_space": r.ColorSpace, "has_alpha": r.HasAlpha},
-	})
+	}); err != nil {
+		return err
+	}
+	a.invalidateLists(ctx)
+	return nil
 }
 
 func (a *ImageRepositoryAdapter) Delete(ctx context.Context, id int) error {

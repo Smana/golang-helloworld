@@ -1,4 +1,4 @@
-.PHONY: build test clean run dev docker-build docker-up docker-down fmt lint vet test-ci build-ci vulncheck trivy docker-ci ci release
+.PHONY: build test clean run dev docker-build docker-up docker-down fmt lint vet test-ci build-ci vulncheck trivy docker-ci ci release soak
 
 # Build the application
 build:
@@ -73,6 +73,14 @@ docker-up:
 docker-down:
 	@echo "Stopping services..."
 	docker-compose down
+
+# Local soak (success criterion 5): loadgen mixed at 25 req/s under memory
+# limits, exporting 100% sampling to local VictoriaMetrics + VictoriaTraces.
+# DURATION defaults to 15m; override with DURATION=5m ./scripts/soak.sh for a
+# shorter run.
+soak:
+	@echo "Running local soak..."
+	./scripts/soak.sh
 
 # Install development dependencies
 install-tools:
