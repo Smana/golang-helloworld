@@ -20,7 +20,7 @@ func NewLogger(config Config) *Logger { return NewLoggerTo(os.Stdout, config) }
 
 // NewLoggerTo writes to w; tests pass a buffer.
 func NewLoggerTo(w io.Writer, config Config) *Logger {
-	var output io.Writer = w
+	output := w
 	if config.LogFormat == "console" {
 		output = zerolog.ConsoleWriter{Out: w, TimeFormat: time.RFC3339}
 	}
