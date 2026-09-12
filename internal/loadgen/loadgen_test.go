@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -130,6 +131,33 @@ func TestClientInjectsTraceparent(t *testing.T) {
 	}
 	if f.traceparent.Load() == 0 {
 		t.Fatal("requests carried no traceparent: traces would not start at the client")
+	}
+}
+
+// TestFailedCallsReuseTheConnection pins that list() and upload() drain a non-2xx body before
+// closing it: closing an unread body makes the transport drop the connection. The error body
+// is large because the transport copes with a few unread bytes on its own.
+func TestFailedCallsReuseTheConnection(t *testing.T) {
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // read the upload, or the server may close the connection itself
+		http.Error(w, strings.Repeat("boom ", 64<<10), http.StatusInternalServerError)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	c := newClient(srv.URL, "test", newLockedRand(1))
+	for range 5 {
+		_, _ = c.list(context.Background())   //nolint:errcheck // the failure is the point
+		_, _ = c.upload(context.Background()) //nolint:errcheck // the failure is the point
+	}
+	if n := conns.Load(); n != 1 {
+		t.Errorf("10 failed calls opened %d connections, want 1 reused", n)
 	}
 }
 
