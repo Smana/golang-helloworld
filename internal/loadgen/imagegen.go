@@ -24,11 +24,6 @@ func newLockedRand(seed int64) *lockedRand {
 }
 
 func (l *lockedRand) IntN(n int) int { l.mu.Lock(); defer l.mu.Unlock(); return l.r.IntN(n) }
-func (l *lockedRand) Float64() float64 {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.r.Float64()
-}
 
 // generateImage returns an in-memory gradient of a random size (320-1920 px
 // wide), as PNG or JPEG: varied sizes and formats exercise storage and the

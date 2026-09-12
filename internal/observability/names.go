@@ -44,6 +44,8 @@ const (
 	AttrJobType          = "job.type"
 	AttrJobAttempt       = "job.attempt"
 	AttrDemoFault        = "demo.fault"
+	AttrLoadgenScenario  = "loadgen.scenario"
+	AttrLoadgenOp        = "loadgen.op"
 )
 
 // Outcome values used across counters.

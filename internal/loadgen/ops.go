@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"image-gallery/internal/observability"
 )
 
 // Op is one kind of request.
@@ -59,7 +61,7 @@ func newClient(base, scenario string, rnd *lockedRand) *client {
 // and injects traceparent, so the trace starts here. Returns the HTTP status.
 func (c *client) do(ctx context.Context, op Op) (status int, err error) {
 	ctx, span := c.tracer.Start(ctx, "loadgen "+string(op), trace.WithAttributes(
-		attribute.String("loadgen.scenario", c.scenario), attribute.String("loadgen.op", string(op))))
+		attribute.String(observability.AttrLoadgenScenario, c.scenario), attribute.String(observability.AttrLoadgenOp, string(op))))
 	defer func() {
 		if err != nil {
 			span.RecordError(err)
@@ -107,22 +109,9 @@ func (c *client) list(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // Resource cleanup
-	var body struct {
-		Images []struct {
-			ID json.RawMessage `json:"id"`
-		} `json:"images"`
-	}
-	if resp.StatusCode < 300 && json.NewDecoder(resp.Body).Decode(&body) == nil {
-		c.mu.Lock()
-		for _, im := range body.Images {
-			if id, err := strconv.Atoi(strings.Trim(string(im.ID), `"`)); err == nil && len(c.ids) < 500 {
-				c.ids = append(c.ids, id)
-			}
-		}
-		c.mu.Unlock()
-	}
-	return resp.StatusCode, statusErr(resp.StatusCode)
+	status := resp.StatusCode
+	c.trackIDs(&c.ids, decodeImageIDs(resp))
+	return status, statusErr(status)
 }
 
 func (c *client) upload(ctx context.Context) (int, error) {
@@ -151,22 +140,56 @@ func (c *client) upload(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // Resource cleanup
+	status := resp.StatusCode
+	c.trackIDs(&c.mine, decodeImageIDs(resp))
+	return status, statusErr(status)
+}
+
+// maxTrackedIDs bounds how many image IDs a run remembers for view/thumbnail/delete picks,
+// so a long-running load stays at constant memory.
+const maxTrackedIDs = 500
+
+// decodeImageIDs reads the numeric image IDs out of a {"images":[{"id":...}]} response body
+// (the id field is a JSON string from GET /api/images, a JSON number from POST /api/images) and
+// always drains and closes the body, on every status, so the connection can be reused.
+func decodeImageIDs(resp *http.Response) []int {
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining before close; nothing actionable on failure
+		_ = resp.Body.Close()                 //nolint:errcheck // Resource cleanup
+	}()
+	if resp.StatusCode >= 300 {
+		return nil
+	}
 	var body struct {
 		Images []struct {
 			ID json.RawMessage `json:"id"`
 		} `json:"images"`
 	}
-	if resp.StatusCode < 300 && json.NewDecoder(resp.Body).Decode(&body) == nil {
-		c.mu.Lock()
-		for _, im := range body.Images {
-			if id, err := strconv.Atoi(strings.Trim(string(im.ID), `"`)); err == nil {
-				c.mine = append(c.mine, id)
-			}
-		}
-		c.mu.Unlock()
+	if json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return nil
 	}
-	return resp.StatusCode, statusErr(resp.StatusCode)
+	ids := make([]int, 0, len(body.Images))
+	for _, im := range body.Images {
+		if id, err := strconv.Atoi(strings.Trim(string(im.ID), `"`)); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// trackIDs appends found onto *ids under the client's mutex, capped at maxTrackedIDs.
+func (c *client) trackIDs(ids *[]int, found []int) {
+	if len(found) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, id := range found {
+		if len(*ids) >= maxTrackedIDs {
+			break
+		}
+		*ids = append(*ids, id)
+	}
 }
 
 func (c *client) get(ctx context.Context, path string) (int, error) {
