@@ -243,6 +243,13 @@ func (c *Container) NotificationService() image.NotificationService {
 	return c.notificationService
 }
 
+// UseJobPublisher wires the asynchronous processing queue into the image service.
+func (c *Container) UseJobPublisher(p image.JobPublisher) {
+	if s, ok := c.imageService.(interface{ SetJobPublisher(image.JobPublisher) }); ok {
+		s.SetJobPublisher(p)
+	}
+}
+
 func (c *Container) Logger() *observability.Logger {
 	return c.logger
 }

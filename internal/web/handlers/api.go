@@ -154,15 +154,17 @@ func (h *Handler) convertDomainImagesToResponse(domainImages []image.Image) []Im
 		}
 
 		images = append(images, ImageResponse{
-			ID:          fmt.Sprintf("%d", img.ID),
-			Name:        img.OriginalFilename,
-			URL:         url,
-			Size:        img.FileSize,
-			UploadTime:  img.UploadedAt.Format("2006-01-02 15:04:05"),
-			ContentType: img.ContentType,
-			Width:       img.Width,
-			Height:      img.Height,
-			Tags:        tagNames,
+			ID:           fmt.Sprintf("%d", img.ID),
+			Name:         img.OriginalFilename,
+			URL:          url,
+			ThumbnailURL: fmt.Sprintf("/api/images/%d/thumbnail", img.ID),
+			Status:       img.Status,
+			Size:         img.FileSize,
+			UploadTime:   img.UploadedAt.Format("2006-01-02 15:04:05"),
+			ContentType:  img.ContentType,
+			Width:        img.Width,
+			Height:       img.Height,
+			Tags:         tagNames,
 		})
 	}
 	return images
@@ -279,7 +281,7 @@ func (h *Handler) renderImageCard(img ImageResponse) string {
 					</button>
 				</div>
 			</div>
-			<img src="%s" alt="%s" class="gallery-image cursor-pointer"
+			<img src="%s" alt="%s" loading="lazy" class="gallery-image cursor-pointer"
 				 onclick="openModal('%s', '%s', %d)">
 			<div class="p-3">
 				<h3 class="font-medium text-gray-900 truncate mb-2">%s</h3>
@@ -292,7 +294,7 @@ func (h *Handler) renderImageCard(img ImageResponse) string {
 			</div>
 		</div>`,
 		img.ID, img.ID, img.ID, img.Name,
-		img.URL, img.Name, img.URL, img.Name, img.Size,
+		img.ThumbnailURL, img.Name, img.URL, img.Name, img.Size,
 		img.Name,
 		metadataBadges,
 		formatFileSize(img.Size),
@@ -554,15 +556,17 @@ func (h *Handler) handleError(ctx context.Context, span trace.Span, err error, l
 }
 
 type ImageResponse struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name,omitempty"`
-	URL         string   `json:"url"`
-	Size        int64    `json:"size"`
-	UploadTime  string   `json:"upload_time"`
-	ContentType string   `json:"content_type,omitempty"`
-	Width       *int     `json:"width,omitempty"`
-	Height      *int     `json:"height,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name,omitempty"`
+	URL          string   `json:"url"`
+	ThumbnailURL string   `json:"thumbnail_url"`
+	Status       string   `json:"status"`
+	Size         int64    `json:"size"`
+	UploadTime   string   `json:"upload_time"`
+	ContentType  string   `json:"content_type,omitempty"`
+	Width        *int     `json:"width,omitempty"`
+	Height       *int     `json:"height,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 func isImageContentType(contentType string) bool {

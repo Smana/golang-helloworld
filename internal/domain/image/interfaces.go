@@ -130,6 +130,11 @@ type ImageInfo struct {
 	Orientation int
 }
 
+// JobPublisher hands an uploaded image to the asynchronous worker.
+type JobPublisher interface {
+	PublishProcessImage(ctx context.Context, imageID int, objectKey string) error
+}
+
 // EventPublisher defines the interface for publishing domain events
 type EventPublisher interface {
 	// PublishImageCreated publishes an event when an image is created

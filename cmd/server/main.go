@@ -13,10 +13,13 @@ import (
 
 	"image-gallery/internal/config"
 	"image-gallery/internal/observability"
+	"image-gallery/internal/platform/cache"
 	"image-gallery/internal/platform/database"
+	"image-gallery/internal/platform/queue"
 	"image-gallery/internal/platform/server"
 	"image-gallery/internal/platform/storage"
 	"image-gallery/internal/services"
+	"image-gallery/internal/services/implementations"
 	"image-gallery/internal/web/handlers"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
@@ -122,6 +125,22 @@ func main() {
 		}
 	}()
 	logger.GetZerolog().Info().Msg("Services container initialized")
+
+	// Wire the asynchronous processing queue: an upload stores the original and
+	// publishes a job rather than processing inline. Without Valkey configured,
+	// uploads stay pending and a worker never picks them up (local/no-queue run).
+	if cfg.Cache.Address != "" {
+		rdb, err := cache.NewInstrumentedClient(cfg.Cache)
+		if err != nil {
+			logger.GetZerolog().Fatal().Err(err).Msg("Failed to connect to Valkey for the job queue")
+		}
+		producer, err := queue.NewProducer(rdb)
+		if err != nil {
+			logger.GetZerolog().Fatal().Err(err).Msg("Failed to create the job producer")
+		}
+		container.UseJobPublisher(implementations.NewQueueJobPublisher(producer))
+		logger.GetZerolog().Info().Msg("Job publisher wired to the Valkey stream")
+	}
 
 	// Sync existing S3 images to database if configured
 	if cfg.Storage.SyncOnStartup {

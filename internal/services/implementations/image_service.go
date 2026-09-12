@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"image-gallery/internal/domain/image"
+	obs "image-gallery/internal/observability"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,18 +30,18 @@ type ImageServiceImpl struct {
 	validator image.ValidationService
 	eventPub  image.EventPublisher // can be nil
 	cache     image.CacheService   // can be nil
+	jobs      image.JobPublisher   // can be nil
 
 	// Observability
-	tracer               trace.Tracer
-	imageUploadCounter   metric.Int64Counter
-	imageProcessingTime  metric.Float64Histogram
-	imageDeletionCounter metric.Int64Counter
-	imageDeletionTime    metric.Float64Histogram
-	cacheHitCounter      metric.Int64Counter
-	cacheMissCounter     metric.Int64Counter
+	tracer       trace.Tracer
+	uploads      metric.Int64Counter
+	deletions    metric.Int64Counter
+	cacheLookups metric.Int64Counter
 }
 
 // NewImageService creates a new image service implementation
+//
+//nolint:errcheck // instrument names are constants; the SDK returns a usable instrument alongside any error
 func NewImageService(
 	imageRepo image.Repository,
 	tagRepo image.TagRepository,
@@ -54,82 +55,45 @@ func NewImageService(
 	meter := otel.Meter("image-gallery/service/image")
 
 	// Create metrics (ignore errors for graceful degradation)
-	uploadCounter, err := meter.Int64Counter(
-		"image.uploads.total",
-		metric.WithDescription("Total number of image uploads"),
-		metric.WithUnit("{upload}"),
-	)
-	if err != nil {
-		uploadCounter = nil
-	}
-
-	processingTime, err := meter.Float64Histogram(
-		"image.processing.duration",
-		metric.WithDescription("Duration of image processing operations"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		processingTime = nil
-	}
-
-	cacheHitCounter, err := meter.Int64Counter(
-		"image.cache.hits",
-		metric.WithDescription("Number of cache hits"),
-		metric.WithUnit("{hit}"),
-	)
-	if err != nil {
-		cacheHitCounter = nil
-	}
-
-	cacheMissCounter, err := meter.Int64Counter(
-		"image.cache.misses",
-		metric.WithDescription("Number of cache misses"),
-		metric.WithUnit("{miss}"),
-	)
-	if err != nil {
-		cacheMissCounter = nil
-	}
-
-	deletionCounter, err := meter.Int64Counter(
-		"image.deletions.total",
-		metric.WithDescription("Total number of image deletions"),
-		metric.WithUnit("{deletion}"),
-	)
-	if err != nil {
-		deletionCounter = nil
-	}
-
-	deletionTime, err := meter.Float64Histogram(
-		"image.deletion.duration",
-		metric.WithDescription("Duration of image deletion operations"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		deletionTime = nil
-	}
+	uploads, _ := meter.Int64Counter(obs.MetricImageUploads, metric.WithUnit("{upload}"), metric.WithDescription("Image uploads by outcome"))
+	deletions, _ := meter.Int64Counter(obs.MetricImageDeletions, metric.WithUnit("{deletion}"), metric.WithDescription("Image deletions by outcome"))
+	cacheLookups, _ := meter.Int64Counter(obs.MetricCacheLookups, metric.WithUnit("{lookup}"), metric.WithDescription("Cache lookups by cache and result"))
 
 	return &ImageServiceImpl{
-		imageRepo:            imageRepo,
-		tagRepo:              tagRepo,
-		storage:              storage,
-		processor:            processor,
-		validator:            validator,
-		eventPub:             eventPub,
-		cache:                cache,
-		tracer:               tracer,
-		imageUploadCounter:   uploadCounter,
-		imageProcessingTime:  processingTime,
-		imageDeletionCounter: deletionCounter,
-		imageDeletionTime:    deletionTime,
-		cacheHitCounter:      cacheHitCounter,
-		cacheMissCounter:     cacheMissCounter,
+		imageRepo:    imageRepo,
+		tagRepo:      tagRepo,
+		storage:      storage,
+		processor:    processor,
+		validator:    validator,
+		eventPub:     eventPub,
+		cache:        cache,
+		tracer:       tracer,
+		uploads:      uploads,
+		deletions:    deletions,
+		cacheLookups: cacheLookups,
+	}
+}
+
+// SetJobPublisher wires the asynchronous processing queue.
+func (s *ImageServiceImpl) SetJobPublisher(p image.JobPublisher) { s.jobs = p }
+
+// enqueueProcessing hands the image to the worker. The upload has already
+// succeeded, so an enqueue failure marks the image failed rather than failing the request.
+func (s *ImageServiceImpl) enqueueProcessing(ctx context.Context, img *image.Image) {
+	if s.jobs == nil {
+		return // no queue configured (local run without Valkey): the image stays pending
+	}
+	if err := s.jobs.PublishProcessImage(ctx, img.ID, img.StoragePath); err != nil {
+		trace.SpanFromContext(ctx).RecordError(err)
+		msg := "enqueue failed: " + err.Error()
+		if uErr := s.imageRepo.UpdateStatus(ctx, img.ID, image.StatusFailed, &msg); uErr == nil {
+			img.Status, img.ProcessingError = image.StatusFailed, &msg
+		}
 	}
 }
 
 // CreateImage handles the complete image creation process
-func (s *ImageServiceImpl) CreateImage(ctx context.Context, req *image.CreateImageRequest, data io.Reader) (*image.Image, error) {
-	startTime := time.Now()
-
+func (s *ImageServiceImpl) CreateImage(ctx context.Context, req *image.CreateImageRequest, data io.Reader) (img *image.Image, err error) {
 	// Build attributes for the span
 	attrs := []attribute.KeyValue{
 		attribute.String("image.filename", req.OriginalFilename),
@@ -146,6 +110,14 @@ func (s *ImageServiceImpl) CreateImage(ctx context.Context, req *image.CreateIma
 
 	ctx, span := s.tracer.Start(ctx, "CreateImage", trace.WithAttributes(attrs...))
 	defer span.End()
+
+	defer func() {
+		outcome := obs.OutcomeSuccess
+		if err != nil {
+			outcome = obs.OutcomeError
+		}
+		s.uploads.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrImageContentType, req.ContentType), attribute.String(obs.AttrOutcome, outcome)))
+	}()
 
 	if req == nil {
 		err := fmt.Errorf("create request cannot be nil")
@@ -178,7 +150,7 @@ func (s *ImageServiceImpl) CreateImage(ctx context.Context, req *image.CreateIma
 		return nil, err
 	}
 
-	img := s.buildImageObject(req, storageResp, tags)
+	img = s.buildImageObject(req, storageResp, tags)
 	if err := img.Validate(); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "validation failed")
@@ -194,32 +166,11 @@ func (s *ImageServiceImpl) CreateImage(ctx context.Context, req *image.CreateIma
 	span.SetAttributes(attribute.Int("image.id", img.ID))
 
 	s.handlePostCreation(ctx, img)
-
-	// Record metrics
-	s.recordImageCreationMetrics(ctx, time.Since(startTime).Seconds(), req.ContentType)
+	s.enqueueProcessing(ctx, img)
 
 	span.SetStatus(codes.Ok, "")
 	span.AddEvent("image_created_successfully")
 	return img, nil
-}
-
-func (s *ImageServiceImpl) recordImageCreationMetrics(ctx context.Context, duration float64, contentType string) {
-	if s.imageProcessingTime != nil {
-		s.imageProcessingTime.Record(ctx, duration,
-			metric.WithAttributes(
-				attribute.String("operation", "create"),
-				attribute.String("content_type", contentType),
-			),
-		)
-	}
-	if s.imageUploadCounter != nil {
-		s.imageUploadCounter.Add(ctx, 1,
-			metric.WithAttributes(
-				attribute.String("content_type", contentType),
-				attribute.String("status", "success"),
-			),
-		)
-	}
 }
 
 func (s *ImageServiceImpl) validateCreateRequest(ctx context.Context, req *image.CreateImageRequest, data io.Reader) error {
@@ -262,6 +213,7 @@ func (s *ImageServiceImpl) buildImageObject(req *image.CreateImageRequest, stora
 		ContentType:      req.ContentType,
 		FileSize:         req.FileSize,
 		StoragePath:      storageResp,
+		Status:           image.StatusPending,
 		Width:            req.Width,
 		Height:           req.Height,
 		UploadedAt:       now,
@@ -323,22 +275,14 @@ func (s *ImageServiceImpl) GetImage(ctx context.Context, id int) (*image.Image, 
 		if cachedImage, err := s.cache.GetImage(ctx, id); err == nil {
 			span.AddEvent("cache_hit")
 			span.SetAttributes(attribute.Bool("cache.hit", true))
-			if s.cacheHitCounter != nil {
-				s.cacheHitCounter.Add(ctx, 1,
-					metric.WithAttributes(attribute.String("operation", "get_image")),
-				)
-			}
+			s.cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrCacheName, "image"), attribute.String(obs.AttrCacheResult, "hit")))
 			span.SetStatus(codes.Ok, "")
 			return cachedImage, nil
 		}
 		// If cache miss or error, continue to database
 		span.AddEvent("cache_miss")
 		span.SetAttributes(attribute.Bool("cache.hit", false))
-		if s.cacheMissCounter != nil {
-			s.cacheMissCounter.Add(ctx, 1,
-				metric.WithAttributes(attribute.String("operation", "get_image")),
-			)
-		}
+		s.cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrCacheName, "image"), attribute.String(obs.AttrCacheResult, "miss")))
 	}
 
 	// Get from database
@@ -381,9 +325,11 @@ func (s *ImageServiceImpl) ListImages(ctx context.Context, req *image.ListImages
 	// Try to get from cache first
 	if s.cache != nil {
 		if cachedResponse, err := s.cache.GetImageList(ctx, cacheKey); err == nil {
+			s.cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrCacheName, "list"), attribute.String(obs.AttrCacheResult, "hit")))
 			return cachedResponse, nil
 		}
 		// If cache miss or error, continue to database
+		s.cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrCacheName, "list"), attribute.String(obs.AttrCacheResult, "miss")))
 	}
 
 	// Get from database
@@ -481,9 +427,7 @@ func (s *ImageServiceImpl) handlePostUpdate(ctx context.Context, id int, img *im
 }
 
 // DeleteImage removes an image and its associated files
-func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) error {
-	startTime := time.Now()
-
+func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) (err error) {
 	// Create span for deletion operation
 	ctx, span := s.tracer.Start(ctx, "DeleteImage",
 		trace.WithAttributes(
@@ -492,11 +436,18 @@ func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) error {
 	)
 	defer span.End()
 
+	defer func() {
+		outcome := obs.OutcomeSuccess
+		if err != nil {
+			outcome = obs.OutcomeError
+		}
+		s.deletions.Add(ctx, 1, metric.WithAttributes(attribute.String(obs.AttrOutcome, outcome)))
+	}()
+
 	span.AddEvent("validating_deletion")
 	if err := s.validator.ValidateImageDeletion(ctx, id); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "validation failed")
-		s.recordDeletionMetrics(ctx, time.Since(startTime).Seconds(), "error", "validation_failed")
 		return fmt.Errorf("deletion validation failed: %w", err)
 	}
 
@@ -505,7 +456,6 @@ func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) error {
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "image not found")
-		s.recordDeletionMetrics(ctx, time.Since(startTime).Seconds(), "error", "not_found")
 		return fmt.Errorf("failed to get image for deletion: %w", err)
 	}
 
@@ -520,7 +470,6 @@ func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) error {
 	if err := s.imageRepo.Delete(ctx, id); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "database deletion failed")
-		s.recordDeletionMetrics(ctx, time.Since(startTime).Seconds(), "error", "database_failed")
 		return fmt.Errorf("failed to delete image from database: %w", err)
 	}
 
@@ -533,25 +482,7 @@ func (s *ImageServiceImpl) DeleteImage(ctx context.Context, id int) error {
 	span.SetStatus(codes.Ok, "")
 	span.AddEvent("deletion_completed")
 
-	s.recordDeletionMetrics(ctx, time.Since(startTime).Seconds(), "success", "")
-
 	return nil
-}
-
-func (s *ImageServiceImpl) recordDeletionMetrics(ctx context.Context, duration float64, status string, errorType string) {
-	attrs := []attribute.KeyValue{
-		attribute.String("status", status),
-	}
-	if errorType != "" {
-		attrs = append(attrs, attribute.String("error_type", errorType))
-	}
-
-	if s.imageDeletionTime != nil {
-		s.imageDeletionTime.Record(ctx, duration, metric.WithAttributes(attrs...))
-	}
-	if s.imageDeletionCounter != nil {
-		s.imageDeletionCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
 }
 
 func (s *ImageServiceImpl) cleanupStorage(ctx context.Context, storagePath string) {

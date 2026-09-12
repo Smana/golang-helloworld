@@ -94,8 +94,9 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/", h.listImagesHandler)
 			r.Post("/", h.uploadImagesHandler) // Upload images endpoint
 			r.Get("/{id}", h.getImageHandler)
-			r.Get("/{id}/view", h.viewImageHandler) // Proxy endpoint for viewing images
-			r.Delete("/{id}", h.deleteImageHandler) // Delete image endpoint
+			r.Get("/{id}/view", h.viewImageHandler)           // Proxy endpoint for viewing images
+			r.Get("/{id}/thumbnail", h.thumbnailImageHandler) // Thumbnail, or the original until the worker is done
+			r.Delete("/{id}", h.deleteImageHandler)           // Delete image endpoint
 		})
 		// Settings endpoints
 		r.Route("/settings", func(r chi.Router) {
@@ -181,6 +182,53 @@ func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, reader); err != nil {
 		http.Error(w, "Failed to serve image", http.StatusInternalServerError)
 		return
+	}
+}
+
+// thumbnailImageHandler serves the worker's thumbnail, or the original while
+// the image is pending, processing or failed.
+func (h *Handler) thumbnailImageHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid image id", http.StatusBadRequest)
+		return
+	}
+	img, err := h.imageService.GetImage(r.Context(), id)
+	if err != nil {
+		http.Error(w, "image not found", http.StatusNotFound)
+		return
+	}
+	path, contentType := img.StoragePath, img.ContentType
+	if img.ThumbnailPath != nil && *img.ThumbnailPath != "" {
+		path, contentType = *img.ThumbnailPath, thumbnailContentType(*img.ThumbnailPath)
+	}
+	rc, err := h.storageService.Retrieve(r.Context(), path)
+	if err != nil {
+		http.Error(w, "image unavailable", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = rc.Close() }() //nolint:errcheck // Resource cleanup
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = io.Copy(w, rc) //nolint:errcheck // response already committed; nothing actionable on copy failure
+}
+
+// Content types thumbnailContentType can return, kept as constants so adding
+// this lookup does not push shared MIME-type literals over goconst's threshold.
+const (
+	contentTypePNG  = "image/png"
+	contentTypeGIF  = "image/gif"
+	contentTypeJPEG = "image/jpeg"
+)
+
+func thumbnailContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return contentTypePNG
+	case ".gif":
+		return contentTypeGIF
+	default:
+		return contentTypeJPEG
 	}
 }
 

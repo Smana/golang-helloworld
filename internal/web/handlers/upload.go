@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -280,17 +279,11 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 		}
 	}
 
-	// Extract image dimensions (currently a stub - TODO: implement without buffering entire file)
-	// For now, pass nil to extractImageDimensions to indicate streaming mode
-	width, height := h.extractImageDimensions(ctx, nil, fileHeader.Filename, fileSpan)
-
-	// Create upload request
+	// Dimensions are extracted by the worker once it processes the image.
 	createReq := &image.CreateImageRequest{
 		OriginalFilename: fileHeader.Filename,
 		ContentType:      contentType,
 		FileSize:         fileHeader.Size,
-		Width:            width,
-		Height:           height,
 		Tags:             tags,
 	}
 
@@ -341,36 +334,6 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 		},
 		bytesUploaded: fileHeader.Size,
 	}
-}
-
-// extractImageDimensions extracts width and height from image data
-func (h *Handler) extractImageDimensions(ctx context.Context, fileData []byte, filename string, span trace.Span) (width *int, height *int) {
-	if h.container == nil || fileData == nil {
-		// Return nil dimensions if processor unavailable or streaming mode (fileData == nil)
-		return nil, nil
-	}
-
-	imageInfo, err := h.container.ImageProcessor().GetImageInfo(ctx, bytes.NewReader(fileData))
-	if err != nil {
-		// Log but don't fail - dimensions are optional
-		h.logger.Warn(ctx).Err(err).Str("filename", filename).Msg("Failed to extract image dimensions")
-		return nil, nil
-	}
-
-	span.SetAttributes(
-		attribute.Int("image.width", imageInfo.Width),
-		attribute.Int("image.height", imageInfo.Height),
-		attribute.String("image.format", imageInfo.Format),
-	)
-
-	h.logger.Debug(ctx).
-		Str("filename", filename).
-		Int("width", imageInfo.Width).
-		Int("height", imageInfo.Height).
-		Str("format", imageInfo.Format).
-		Msg("Extracted image dimensions")
-
-	return &imageInfo.Width, &imageInfo.Height
 }
 
 // parseTags parses comma-separated tags and returns cleaned, deduplicated tag names
