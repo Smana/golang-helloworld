@@ -276,8 +276,8 @@ func TestService_MagicNumberValidation(t *testing.T) {
 
 	t.Run("invalid JPEG magic number", func(t *testing.T) {
 		// Create data with wrong magic number
-		fakeData := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
-		fakeData = append(fakeData, make([]byte, 100)...)
+		fakeData := make([]byte, 110)
+		copy(fakeData, []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09})
 
 		_, err := service.Store(context.Background(), "test.jpg", "image/jpeg", bytes.NewReader(fakeData), int64(len(fakeData)))
 		assert.Error(t, err)

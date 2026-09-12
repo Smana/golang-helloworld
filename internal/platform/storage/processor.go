@@ -19,8 +19,16 @@ import (
 
 // Constants for repeated string literals
 const (
-	formatPNG = "png"
-	formatGIF = "gif"
+	formatJPEG = "jpeg"
+	formatPNG  = "png"
+	formatGIF  = "gif"
+	formatWebP = "webp"
+
+	contentTypeJPEG    = "image/jpeg"
+	contentTypeJPEGAlt = "image/jpg" // nonstandard variant some clients send
+	contentTypePNG     = "image/png"
+	contentTypeGIF     = "image/gif"
+	contentTypeWebP    = "image/webp"
 )
 
 // ImageInfo represents metadata extracted from an image
@@ -254,11 +262,11 @@ func (p *ImageProcessor) validateInputs(data io.Reader, contentType string) erro
 // validateSupportedContentType checks if the content type is supported
 func (p *ImageProcessor) validateSupportedContentType(contentType string) error {
 	supportedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"image/webp": true,
+		contentTypeJPEG:    true,
+		contentTypeJPEGAlt: true,
+		contentTypePNG:     true,
+		contentTypeGIF:     true,
+		contentTypeWebP:    true,
 	}
 
 	if !supportedTypes[contentType] {
@@ -292,11 +300,11 @@ func (p *ImageProcessor) validateImageDimensions(config image.Config) error {
 // validateFormatMatchesContentType validates that the image format matches the content type
 func (p *ImageProcessor) validateFormatMatchesContentType(format, contentType string) error {
 	expectedFormats := map[string][]string{
-		"image/jpeg": {"jpeg"},
-		"image/jpg":  {"jpeg"},
-		"image/png":  {"png"},
-		"image/gif":  {"gif"},
-		"image/webp": {"webp"},
+		contentTypeJPEG:    {formatJPEG},
+		contentTypeJPEGAlt: {formatJPEG},
+		contentTypePNG:     {formatPNG},
+		contentTypeGIF:     {formatGIF},
+		contentTypeWebP:    {formatWebP},
 	}
 
 	expectedList, ok := expectedFormats[contentType]
@@ -364,7 +372,7 @@ func (p *ImageProcessor) OptimizeImage(ctx context.Context, data io.Reader, qual
 
 // GetSupportedFormats returns the list of supported image formats
 func (p *ImageProcessor) GetSupportedFormats() []string {
-	return []string{"jpeg", "jpg", formatPNG, formatGIF, "webp"}
+	return []string{formatJPEG, "jpg", formatPNG, formatGIF, formatWebP}
 }
 
 // GetMaxDimensions returns the maximum allowed dimensions

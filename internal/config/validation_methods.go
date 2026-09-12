@@ -14,6 +14,16 @@ import (
 const (
 	minioadminCredential = "minioadmin"
 	storageProviderGCS   = "gcs"
+	envProduction        = "production"
+	envTest              = "test"
+
+	fieldPort         = "port"
+	fieldDatabaseURL  = "database_url"
+	fieldBucketName   = "storage.bucket_name"
+	fieldReadTimeout  = "server.read_timeout"
+	fieldWriteTimeout = "server.write_timeout"
+
+	msgMinioadminInProduction = "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)"
 )
 
 // ValidationError represents a configuration validation error
@@ -94,20 +104,20 @@ func (c *Config) validateServer() ValidationErrors {
 	// Validate port
 	if c.Port == "" {
 		errors = append(errors, ValidationError{
-			Field:   "port",
+			Field:   fieldPort,
 			Value:   c.Port,
 			Message: "port cannot be empty",
 		})
 	} else {
 		if port, err := strconv.Atoi(c.Port); err != nil {
 			errors = append(errors, ValidationError{
-				Field:   "port",
+				Field:   fieldPort,
 				Value:   c.Port,
 				Message: "port must be a valid integer",
 			})
 		} else if port < 1 || port > 65535 {
 			errors = append(errors, ValidationError{
-				Field:   "port",
+				Field:   fieldPort,
 				Value:   c.Port,
 				Message: "port must be between 1 and 65535",
 			})
@@ -116,7 +126,7 @@ func (c *Config) validateServer() ValidationErrors {
 
 	// Validate environment
 	if c.Environment != "" {
-		validEnvs := []string{"development", "production", "test", "staging"}
+		validEnvs := []string{"development", envProduction, envTest, "staging"}
 		isValid := false
 		for _, validEnv := range validEnvs {
 			if c.Environment == validEnv {
@@ -141,9 +151,9 @@ func (c *Config) validateDatabase() ValidationErrors {
 	var errors ValidationErrors
 
 	// Database URL is required for non-test environments
-	if c.Environment != "test" && c.DatabaseURL == "" {
+	if c.Environment != envTest && c.DatabaseURL == "" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL is required for non-test environments",
 		})
@@ -159,7 +169,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 	parsedURL, err := url.Parse(c.DatabaseURL)
 	if err != nil {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must be a valid URL",
 		})
@@ -169,7 +179,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 	// Check for required components
 	if parsedURL.Scheme != "postgres" && parsedURL.Scheme != "postgresql" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   parsedURL.Scheme,
 			Message: "database URL must use postgres or postgresql scheme",
 		})
@@ -177,7 +187,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 
 	if parsedURL.Host == "" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must include host",
 		})
@@ -185,7 +195,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 
 	if parsedURL.Path == "" || parsedURL.Path == "/" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must include database name",
 		})
@@ -221,13 +231,13 @@ func (c *Config) validateStorage() ValidationErrors {
 	// Validate bucket name: required for both providers, each with its own naming rules.
 	if c.Storage.BucketName == "" {
 		errors = append(errors, ValidationError{
-			Field:   "storage.bucket_name",
+			Field:   fieldBucketName,
 			Value:   c.Storage.BucketName,
 			Message: "storage bucket name cannot be empty",
 		})
 	} else if msg := bucketNameError(c.Storage.Provider, c.Storage.BucketName); msg != "" {
 		errors = append(errors, ValidationError{
-			Field:   "storage.bucket_name",
+			Field:   fieldBucketName,
 			Value:   c.Storage.BucketName,
 			Message: msg,
 		})
@@ -246,13 +256,13 @@ func (c *Config) validateStorageCredentialsAndLimits() ValidationErrors {
 
 	// Validate access credentials for production environments
 	// Allow empty credentials for EKS Pod Identity / IAM roles
-	if c.Environment == "production" {
+	if c.Environment == envProduction {
 		// Only warn about minioadmin credentials, allow empty for IAM roles
 		if c.Storage.AccessKeyID == minioadminCredential {
 			errors = append(errors, ValidationError{
 				Field:   "storage.access_key_id",
 				Value:   c.Storage.AccessKeyID,
-				Message: "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)",
+				Message: msgMinioadminInProduction,
 			})
 		}
 
@@ -260,7 +270,7 @@ func (c *Config) validateStorageCredentialsAndLimits() ValidationErrors {
 			errors = append(errors, ValidationError{
 				Field:   "storage.secret_access_key",
 				Value:   "[REDACTED]",
-				Message: "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)",
+				Message: msgMinioadminInProduction,
 			})
 		}
 	}
@@ -328,13 +338,13 @@ func (c *Config) validateServerTimeouts() ValidationErrors {
 	// Validate read timeout
 	if c.Server.ReadTimeout <= 0 {
 		errors = append(errors, ValidationError{
-			Field:   "server.read_timeout",
+			Field:   fieldReadTimeout,
 			Value:   c.Server.ReadTimeout,
 			Message: "read timeout must be greater than 0",
 		})
 	} else if c.Server.ReadTimeout > 5*time.Minute {
 		errors = append(errors, ValidationError{
-			Field:   "server.read_timeout",
+			Field:   fieldReadTimeout,
 			Value:   c.Server.ReadTimeout,
 			Message: "read timeout should not exceed 5 minutes",
 		})
@@ -343,13 +353,13 @@ func (c *Config) validateServerTimeouts() ValidationErrors {
 	// Validate write timeout
 	if c.Server.WriteTimeout <= 0 {
 		errors = append(errors, ValidationError{
-			Field:   "server.write_timeout",
+			Field:   fieldWriteTimeout,
 			Value:   c.Server.WriteTimeout,
 			Message: "write timeout must be greater than 0",
 		})
 	} else if c.Server.WriteTimeout > 5*time.Minute {
 		errors = append(errors, ValidationError{
-			Field:   "server.write_timeout",
+			Field:   fieldWriteTimeout,
 			Value:   c.Server.WriteTimeout,
 			Message: "write timeout should not exceed 5 minutes",
 		})

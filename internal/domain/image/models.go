@@ -121,13 +121,21 @@ const (
 	MinImageHeight  = 1
 )
 
+const (
+	contentTypeJPEG    = "image/jpeg"
+	contentTypeJPEGAlt = "image/jpg" // nonstandard variant some clients send
+	contentTypePNG     = "image/png"
+	contentTypeGIF     = "image/gif"
+	contentTypeWebP    = "image/webp"
+)
+
 // Supported content types
 var SupportedContentTypes = map[string]bool{
-	"image/jpeg": true,
-	"image/jpg":  true,
-	"image/png":  true,
-	"image/gif":  true,
-	"image/webp": true,
+	contentTypeJPEG:    true,
+	contentTypeJPEGAlt: true,
+	contentTypePNG:     true,
+	contentTypeGIF:     true,
+	contentTypeWebP:    true,
 }
 
 // Business logic methods for Image
@@ -513,11 +521,11 @@ func NewTag(name string) (*Tag, error) {
 func ValidateContentTypeFromExtension(contentType, filename string) error {
 	ext := strings.ToLower(filepath.Ext(filename))
 	expectedTypes := map[string][]string{
-		".jpg":  {"image/jpeg", "image/jpg"},
-		".jpeg": {"image/jpeg", "image/jpg"},
-		".png":  {"image/png"},
-		".gif":  {"image/gif"},
-		".webp": {"image/webp"},
+		".jpg":  {contentTypeJPEG, contentTypeJPEGAlt},
+		".jpeg": {contentTypeJPEG, contentTypeJPEGAlt},
+		".png":  {contentTypePNG},
+		".gif":  {contentTypeGIF},
+		".webp": {contentTypeWebP},
 	}
 
 	if expectedList, exists := expectedTypes[ext]; exists {

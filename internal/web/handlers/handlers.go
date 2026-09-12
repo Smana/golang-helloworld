@@ -179,14 +179,14 @@ func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
 		// Fallback content type based on extension
 		ext := strings.ToLower(filepath.Ext(img.StoragePath))
 		switch ext {
-		case ".jpg", ".jpeg":
+		case extJPG, extJPEG:
 			w.Header().Set("Content-Type", contentTypeJPEG)
 		case extPNG:
 			w.Header().Set("Content-Type", contentTypePNG)
 		case extGIF:
 			w.Header().Set("Content-Type", contentTypeGIF)
-		case ".webp":
-			w.Header().Set("Content-Type", "image/webp")
+		case extWebP:
+			w.Header().Set("Content-Type", contentTypeWebP)
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
@@ -241,8 +241,11 @@ const (
 // File extensions matched both here and in viewImageHandler's fallback
 // content-type switch above, kept as constants for the same goconst reason.
 const (
-	extPNG = ".png"
-	extGIF = ".gif"
+	extJPG  = ".jpg"
+	extJPEG = ".jpeg"
+	extPNG  = ".png"
+	extGIF  = ".gif"
+	extWebP = ".webp"
 )
 
 func thumbnailContentType(path string) string {

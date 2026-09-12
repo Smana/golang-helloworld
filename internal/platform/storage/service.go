@@ -200,8 +200,8 @@ func (s *Service) ListObjects(ctx context.Context, prefix string, maxKeys int) (
 
 func (s *Service) generateStoragePath(filename string) string {
 	// Create a hash-based directory structure for better distribution
-	hash := sha256.Sum256([]byte(filename + time.Now().String()))
-	hashStr := fmt.Sprintf("%x", hash)
+	sum := sha256.Sum256([]byte(filename + time.Now().String()))
+	hashStr := fmt.Sprintf("%x", sum)
 
 	// Use first 2 characters for directory structure
 	dir1 := hashStr[:2]
@@ -236,11 +236,11 @@ func (s *Service) sanitizeFilename(filename string) string {
 func (s *Service) isValidContentType(contentType string) bool {
 	// Basic supported content types - this could be moved to config
 	supportedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"image/webp": true,
+		contentTypeJPEG:    true,
+		contentTypeJPEGAlt: true,
+		contentTypePNG:     true,
+		contentTypeGIF:     true,
+		contentTypeWebP:    true,
 	}
 	return supportedTypes[contentType]
 }
@@ -363,11 +363,11 @@ func (s *Service) validateExtensionContentType(filename, contentType string) err
 
 	// Map of extensions to expected content types
 	expectedTypes := map[string][]string{
-		".jpg":  {"image/jpeg", "image/jpg"},
-		".jpeg": {"image/jpeg", "image/jpg"},
-		".png":  {"image/png"},
-		".gif":  {"image/gif"},
-		".webp": {"image/webp"},
+		".jpg":  {contentTypeJPEG, contentTypeJPEGAlt},
+		".jpeg": {contentTypeJPEG, contentTypeJPEGAlt},
+		".png":  {contentTypePNG},
+		".gif":  {contentTypeGIF},
+		".webp": {contentTypeWebP},
 	}
 
 	if expected, exists := expectedTypes[ext]; exists {
@@ -425,20 +425,20 @@ func (s *Service) validateHeaderSize(header []byte) error {
 // getMagicNumberPatterns returns the magic number patterns for a content type
 func (s *Service) getMagicNumberPatterns(contentType string) ([][]byte, error) {
 	magicNumbers := map[string][][]byte{
-		"image/jpeg": {
+		contentTypeJPEG: {
 			{0xFF, 0xD8, 0xFF}, // JPEG
 		},
-		"image/jpg": {
+		contentTypeJPEGAlt: {
 			{0xFF, 0xD8, 0xFF}, // JPEG (alternative content type)
 		},
-		"image/png": {
+		contentTypePNG: {
 			{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, // PNG
 		},
-		"image/gif": {
+		contentTypeGIF: {
 			{0x47, 0x49, 0x46, 0x38, 0x37, 0x61}, // GIF87a
 			{0x47, 0x49, 0x46, 0x38, 0x39, 0x61}, // GIF89a
 		},
-		"image/webp": {
+		contentTypeWebP: {
 			{0x52, 0x49, 0x46, 0x46}, // RIFF (WebP container)
 		},
 	}
@@ -479,7 +479,7 @@ func (s *Service) matchesPattern(header []byte, pattern []byte) bool {
 
 // validateSpecialCases handles content type specific additional validations
 func (s *Service) validateSpecialCases(header []byte, contentType string) error {
-	if contentType == "image/webp" {
+	if contentType == contentTypeWebP {
 		return s.validateWebPSignature(header)
 	}
 	return nil

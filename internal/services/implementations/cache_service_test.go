@@ -197,7 +197,7 @@ func TestCacheService_WithRedisClient(t *testing.T) {
 // getTestRedisClient creates a Redis client for testing
 // Returns nil if Redis is not available
 func getTestRedisClient(t *testing.T) *cache.RedisClient {
-	config := config.CacheConfig{
+	cfg := config.CacheConfig{
 		Enabled:     true,
 		Address:     "localhost:6379",
 		Password:    "",
@@ -206,7 +206,7 @@ func getTestRedisClient(t *testing.T) *cache.RedisClient {
 		DefaultTTL:  1 * time.Hour,
 	}
 
-	client, err := cache.NewRedisClient(config)
+	client, err := cache.NewRedisClient(cfg)
 	if err != nil {
 		t.Logf("Redis not available for testing: %v", err)
 		return nil

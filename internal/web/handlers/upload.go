@@ -365,11 +365,11 @@ func parseTags(tagsStr string) []string {
 // isSupportedImageType checks if the content type is a supported image format
 func isSupportedImageType(contentType string) bool {
 	supportedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"image/webp": true,
+		contentTypeJPEG:    true,
+		contentTypeJPEGAlt: true,
+		contentTypePNG:     true,
+		contentTypeGIF:     true,
+		contentTypeWebP:    true,
 	}
 	return supportedTypes[contentType]
 }

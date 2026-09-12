@@ -187,12 +187,13 @@ func (tc *TestContainers) setupMinio(ctx context.Context) error {
 	}
 
 	// Wrap in our storage client using config
+	bucketName := "test-images"
 	storageConfig := config.StorageConfig{
 		Endpoint:        endpoint,
 		AccessKeyID:     tc.MinioUsername,
 		SecretAccessKey: tc.MinioPassword,
 		UseSSL:          false,
-		BucketName:      "test-images",
+		BucketName:      bucketName,
 		Region:          "us-east-1",
 		Provider:        storage.ProviderS3,
 	}
@@ -205,7 +206,6 @@ func (tc *TestContainers) setupMinio(ctx context.Context) error {
 	tc.ObjectStore = objectStore
 
 	// Create test bucket
-	bucketName := "test-images"
 	exists, err := minioClientInstance.BucketExists(ctx, bucketName)
 	if err != nil {
 		return fmt.Errorf("failed to check if bucket exists: %w", err)

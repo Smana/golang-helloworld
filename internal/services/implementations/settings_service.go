@@ -38,7 +38,7 @@ type SettingsServiceImpl struct {
 //nolint:errcheck // instrument names are constants; the SDK returns a usable instrument alongside any error
 func NewSettingsService(
 	repo settings.Repository,
-	cache *cache.RedisClient,
+	redisCache *cache.RedisClient,
 ) settings.SettingsService {
 	tracer := otel.Tracer("image-gallery/service/settings")
 	meter := otel.Meter("image-gallery/service/settings")
@@ -49,7 +49,7 @@ func NewSettingsService(
 
 	return &SettingsServiceImpl{
 		repo:         repo,
-		cache:        cache,
+		cache:        redisCache,
 		tracer:       tracer,
 		settingsOps:  settingsOps,
 		cacheLookups: cacheLookups,
