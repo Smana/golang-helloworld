@@ -34,6 +34,10 @@ func RegisterGauges(rdb redis.UniversalClient, meter metric.Meter, stream, group
 		return err
 	}
 	attrs := metric.WithAttributes(semconv.MessagingDestinationName(stream), semconv.MessagingConsumerGroupName(group))
+	// The returned metric.Registration is intentionally discarded: RegisterGauges'
+	// signature (the Task 10 contract other tasks build on) has no way to hand it
+	// back, and callers register gauges once for the worker process's entire
+	// lifetime with no call to Unregister, so there is nothing to do with it.
 	_, err = meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()

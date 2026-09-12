@@ -32,6 +32,12 @@ type options struct {
 // Option configures a Producer or Consumer.
 type Option func(*options)
 
+// deadLetterHookTimeout bounds how long WithDeadLetterHook's callback may run
+// (ruling R27): a hook that blocks longer must not pin a consumer's
+// concurrency slot or keep Run from returning on shutdown. Not exposed as a
+// With... option: nothing configures more than one value yet (YAGNI).
+const deadLetterHookTimeout = 5 * time.Second
+
 func defaultOptions() options {
 	host, err := os.Hostname() // the pod name in Kubernetes: one consumer per pod
 	if err != nil || host == "" {

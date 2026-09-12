@@ -277,8 +277,9 @@ func TestGaugesAndReady(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, _ = p.Publish(ctx, Job{Type: JobTypeProcessImage, ImageID: i, ObjectKey: "k"})
 	}
+	// XReadGroup is synchronous: by the time Result() returns, the entry is
+	// already in the group's PEL, so no extra wait is needed before collecting.
 	_, _ = h.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{Group: "workers", Consumer: "x", Streams: []string{h.streamName(), ">"}, Count: 1}).Result()
-	time.Sleep(20 * time.Millisecond)
 
 	var rm metricdata.ResourceMetrics
 	if err := gaugeReader.Collect(ctx, &rm); err != nil {

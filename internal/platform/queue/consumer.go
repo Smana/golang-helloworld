@@ -172,6 +172,16 @@ func (c *Consumer) handle(ctx context.Context, m redis.XMessage, h Handler) {
 }
 
 // attempts runs h up to maxAttempts times with exponential backoff.
+//
+// The attempt budget (n) lives only in this call's stack: it is not persisted
+// to the stream entry. If the worker process dies mid-backoff, the entry sits
+// unacked in the PEL until some consumer's XAutoClaim picks it back up, and
+// that next handle() call starts counting from attempt 1 again — a worker
+// that crash-loops on the same poison job can therefore retry it more than
+// maxAttempts times overall. Redis does track delivery count durably per
+// pending entry (XPendingExt's RetryCount, incremented by XAutoClaim); this
+// consumer does not consult it (ruling R28: not worth the hot-path complexity
+// and flakiness risk for a failure mode no acceptance criterion exercises).
 func (c *Consumer) attempts(ctx context.Context, job Job, h Handler) (string, error) {
 	var err error
 	for n := 1; n <= c.o.maxAttempts; n++ {
@@ -218,9 +228,29 @@ func (c *Consumer) deadLetter(ctx context.Context, m redis.XMessage, job Job, ca
 	if err := c.rdb.XAdd(ctx, &redis.XAddArgs{Stream: c.o.deadLetter, MaxLen: c.o.maxLen, Approx: true, Values: vals}).Err(); err != nil {
 		trace.SpanFromContext(ctx).RecordError(err)
 	}
-	if c.o.onDeadLetter != nil {
-		c.o.onDeadLetter(ctx, job, cause)
+	if c.o.onDeadLetter == nil {
+		return
 	}
+	// The hook runs on ctx == context.WithoutCancel(<Run's ctx>) (see Run), so
+	// shutdown alone never stops it: bound it ourselves (ruling R27) so a slow
+	// or hanging hook cannot pin this goroutine's sem slot and, through it,
+	// keep Run's deferred wg.Wait() from ever returning. A well-behaved hook
+	// that honors ctx cancellation stops on its own when hookCtx expires; one
+	// that ignores it is simply abandoned running in the background — that
+	// leaked goroutine is an accepted cost, not tracked further.
+	hookCtx, cancel := context.WithTimeout(ctx, deadLetterHookTimeout)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.o.onDeadLetter(hookCtx, job, cause)
+	}()
+	select {
+	case <-done:
+	case <-hookCtx.Done():
+		trace.SpanFromContext(ctx).RecordError(
+			fmt.Errorf("dead-letter hook exceeded %s, abandoning it", deadLetterHookTimeout))
+	}
+	cancel()
 }
 
 // pause sleeps for d or until ctx is done.
