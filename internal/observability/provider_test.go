@@ -7,9 +7,12 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 func testConfig() Config {
@@ -19,6 +22,18 @@ func testConfig() Config {
 		TracesEnabled: true, TracesEndpoint: "http://unused", TracesSampler: SamplerAlwaysOn, TracesSamplerArg: "1.0",
 		MetricsEnabled: true, MetricsEndpoint: "http://unused",
 	}
+}
+
+// resetOTelGlobals undoes what NewProviderWith installs globally, so the providers a test
+// shuts down do not leak into later tests. It resets to no-op implementations rather than to
+// the previous values: the default globals delegate to the first provider ever set, so
+// putting them back would still route through the test's providers.
+func resetOTelGlobals(t *testing.T) {
+	t.Cleanup(func() {
+		otel.SetTracerProvider(tracenoop.NewTracerProvider())
+		otel.SetMeterProvider(metricnoop.NewMeterProvider())
+		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+	})
 }
 
 func sumCounter(t *testing.T, rm metricdata.ResourceMetrics, name string, match attribute.KeyValue) int64 {
@@ -60,6 +75,7 @@ func TestProviderCountsEndedAndExportedSpans(t *testing.T) {
 	ctx := context.Background()
 	exp := tracetest.NewInMemoryExporter()
 	reader := sdkmetric.NewManualReader()
+	resetOTelGlobals(t)
 	p, err := NewProviderWith(ctx, testConfig(), nil, exp, reader)
 	if err != nil {
 		t.Fatal(err)
