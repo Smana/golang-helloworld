@@ -60,7 +60,7 @@ This is a clean architecture Go application with strict separation of concerns:
 - **Test-Driven Development**: Comprehensive unit and integration tests
 
 ### Technology Stack
-- **Runtime**: Go 1.25
+- **Runtime**: Go 1.26
 - **Database**: PostgreSQL 15 with Atlas schema management
 - **Storage**: S3 (MinIO/AWS) or GCS object storage, behind one `ObjectStore` interface
 - **Testing**: Testcontainers for isolated integration tests

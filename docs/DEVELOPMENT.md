@@ -4,7 +4,7 @@ This guide provides comprehensive information for developing the Image Gallery a
 
 ## 📋 Prerequisites
 
-- **Go 1.25+** - Latest version required
+- **Go 1.26+** - required by `go.mod` (golang.org/x/crypto pulls the floor up)
 - **Docker & Docker Compose** - For local development environment
 - **Make** - For running development commands
 - **Atlas CLI** - For database schema management (optional)

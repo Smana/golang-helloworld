@@ -175,7 +175,7 @@ make build
 
 ## 🛠️ Technology Stack
 
-- **Runtime**: Go 1.25
+- **Runtime**: Go 1.26
 - **Database**: PostgreSQL with Atlas migrations
 - **Cache**: Valkey (Redis-compatible)
 - **Storage**: S3 (MinIO/AWS) or GCS, behind one `ObjectStore` interface
