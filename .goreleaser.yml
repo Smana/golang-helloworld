@@ -9,8 +9,8 @@ before:
 
 builds:
   - id: image-gallery
-    binary: server
-    main: ./cmd/server
+    binary: image-gallery
+    main: ./cmd/image-gallery
     env:
       - CGO_ENABLED=0
     goos:

@@ -84,7 +84,7 @@ jobs:
           ARCH=$(echo $PLATFORM | cut -d'/' -f2)
           echo "os=$OS" >> $GITHUB_OUTPUT
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "binary_name=server-$OS-$ARCH" >> $GITHUB_OUTPUT
+          echo "binary_name=image-gallery-$OS-$ARCH" >> $GITHUB_OUTPUT
 
       - name: Build Go binary
         uses: dagger/dagger-for-github@v7
@@ -95,7 +95,7 @@ jobs:
             with-platform --platform=${{ matrix.platform }}
             with-cgo-disabled
             with-source --source=.
-            build --pkg=./cmd/server --ldflags="-w -s"
+            build --pkg=./cmd/image-gallery --ldflags="-w -s"
             export --path=./bin/${{ steps.platform.outputs.binary_name }}
 
       - name: Upload build artifacts

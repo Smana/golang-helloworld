@@ -3,7 +3,7 @@
 # Build the application
 build:
 	@echo "Building the application..."
-	go build -o ./bin/server ./cmd/server
+	go build -o ./bin/image-gallery ./cmd/image-gallery
 
 # Run tests
 test:
@@ -25,7 +25,7 @@ clean:
 # Run the application locally
 run: build
 	@echo "Running the application..."
-	./bin/server
+	./bin/image-gallery serve
 
 # Run in development mode with hot reload (requires air)
 dev:
@@ -120,7 +120,7 @@ build-ci:
 	@if command -v dagger > /dev/null; then \
 		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
 			--src=. \
-			--args=go,build,-ldflags,"-w -s",-o,./bin/server,./cmd/server; \
+			--args=go,build,-ldflags,"-w -s",-o,./bin/image-gallery,./cmd/image-gallery; \
 	else \
 		echo "Dagger not installed. Run 'make install-tools' first"; \
 		exit 1; \
@@ -135,11 +135,11 @@ docker-ci:
 			with-platform linux/amd64,linux/arm64 \
 			with-cgo-disabled \
 			build \
-			--package=./cmd/server \
+			--package=./cmd/image-gallery \
 			--ldflags="-w -s" \
 			container \
 			--base-image=gcr.io/distroless/static-debian12:nonroot \
-			--binary-name=server \
+			--binary-name=image-gallery \
 			with-exposed-port 8080 \
 			with-label org.opencontainers.image.source=https://github.com/smana/image-gallery \
 			with-label org.opencontainers.image.title=image-gallery; \
