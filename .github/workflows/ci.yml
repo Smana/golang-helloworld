@@ -32,26 +32,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # --version pins the golang: image tag the Dagger module builds on. Without
+      # it the module defaults to golang:latest, which drifts away from the
+      # golangci-lint version below: golangci-lint v1 is frozen at v1.64.8 (v2
+      # moved to the .../v2/... module path), so its golang.org/x/tools cannot
+      # read export data from a Go newer than it, and every package fails to
+      # typecheck. GO_VERSION is what go.mod requires, so it is the right pin.
       - name: Run Go linting
         uses: dagger/dagger-for-github@v7
         with:
           version: "latest"
           module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,run,github.com/golangci/golangci-lint/cmd/golangci-lint@latest,run"
+          call: "--version=${{ env.GO_VERSION }} exec --src=. --args=go,run,github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8,run"
 
       - name: Run Go tests
         uses: dagger/dagger-for-github@v7
         with:
           version: "latest"
           module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,test,./...,--coverprofile=coverage.out,--race,--short"
+          call: "--version=${{ env.GO_VERSION }} exec --src=. --args=go,test,./...,--coverprofile=coverage.out,--race,--short"
 
       - name: Run vulnerability scan with govulncheck
         uses: dagger/dagger-for-github@v7
         with:
           version: "latest"
           module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,run,golang.org/x/vuln/cmd/govulncheck@latest,./..."
+          call: "--version=${{ env.GO_VERSION }} exec --src=. --args=go,run,golang.org/x/vuln/cmd/govulncheck@latest,./..."
 
 
       - name: Upload test coverage
@@ -92,6 +98,7 @@ jobs:
           version: "latest"
           module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
           call: >-
+            --version=${{ env.GO_VERSION }}
             with-platform --platform=${{ matrix.platform }}
             with-cgo-disabled
             with-source --source=.
