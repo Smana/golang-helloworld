@@ -17,6 +17,7 @@ import (
 	"github.com/KimMachineGun/automemlimit/memlimit"
 
 	"image-gallery/internal/app"
+	"image-gallery/internal/loadgen"
 )
 
 func init() {
@@ -59,6 +60,8 @@ func run(args []string) int {
 		return exitCode(app.RunServe(ctx))
 	case "worker":
 		return exitCode(app.RunWorker(ctx))
+	case "loadgen":
+		return loadgen.Main(ctx, args, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
