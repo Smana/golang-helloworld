@@ -5,6 +5,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/gif" // decoders for image.DecodeConfig, registered here rather than relied on from storage
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"time"
 
@@ -13,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	_ "golang.org/x/image/webp"
 
 	domain "image-gallery/internal/domain/image"
 	obs "image-gallery/internal/observability"
@@ -162,14 +167,20 @@ func (p *Processor) fetch(ctx context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-// decode extracts image metadata and rejects images too large to process.
+// decode rejects images too large to process, then extracts their metadata.
+// The size check reads the header only: GetImageInfo fully decodes, and a file
+// well under maxBytes can declare enough pixels to exhaust worker memory.
 func (p *Processor) decode(ctx context.Context, data []byte) (*storage.ImageInfo, error) {
-	info, err := p.decoder.GetImageInfo(ctx, bytes.NewReader(data))
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, queue.Permanent(fmt.Errorf("decode: %w", err))
 	}
-	if info.Width*info.Height > p.maxPixels {
-		return nil, queue.Permanent(fmt.Errorf("image too large to process: %dx%d", info.Width, info.Height))
+	if cfg.Width*cfg.Height > p.maxPixels {
+		return nil, queue.Permanent(fmt.Errorf("image too large to process: %dx%d", cfg.Width, cfg.Height))
+	}
+	info, err := p.decoder.GetImageInfo(ctx, bytes.NewReader(data))
+	if err != nil {
+		return nil, queue.Permanent(fmt.Errorf("decode: %w", err))
 	}
 	return info, nil
 }

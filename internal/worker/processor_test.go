@@ -3,10 +3,13 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
+	"runtime"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -121,6 +124,42 @@ func TestHandleRejectsOversizedImageAsPermanent(t *testing.T) {
 	p.maxPixels = 100 // 64x48 = 3072 pixels
 	if err := p.Handle(context.Background(), job()); !queue.IsPermanent(err) {
 		t.Fatalf("want a permanent error, got %v", err)
+	}
+}
+
+// bombPNG is a valid 1x1 grayscale PNG whose header claims w x h: a few dozen
+// bytes that a full decode must allocate w*h bytes for before it finds the
+// pixel data missing.
+func bombPNG(t *testing.T, w, h uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	// signature (8), IHDR length (4) and type (4), then width, height; CRC after the 13 data bytes
+	binary.BigEndian.PutUint32(b[16:], w)
+	binary.BigEndian.PutUint32(b[20:], h)
+	binary.BigEndian.PutUint32(b[29:], crc32.ChecksumIEEE(b[12:29]))
+	return b
+}
+
+func TestDecodeRejectsOversizedImageFromItsHeader(t *testing.T) {
+	const w, h = 8000, 8000 // 64 MP, over the default 40 MP guard
+	p := NewProcessor(nil, nil, nil, nil)
+	data := bombPNG(t, w, h)
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := p.decode(context.Background(), data)
+	runtime.ReadMemStats(&after)
+
+	if !queue.IsPermanent(err) {
+		t.Fatalf("want a permanent error, got %v", err)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got >= w*h {
+		t.Fatalf("rejecting a %d-byte file allocated %d bytes: it was decoded before the size check", len(data), got)
 	}
 }
 
