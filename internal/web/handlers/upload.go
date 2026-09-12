@@ -69,13 +69,14 @@ func (h *Handler) uploadImagesHandler(w http.ResponseWriter, r *http.Request) {
 		Str("content_type", r.Header.Get("Content-Type")).
 		Msg("Starting image upload request")
 
-	// Limit request body size
+	// Limit request body size: parsing stops at maxUploadSize, whatever the client sends
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
 	// Parse multipart form with limited in-memory buffer
 	// maxMemoryPerUpload (1MB) is buffered in RAM per request
 	// Files larger than 1MB are written to temporary files in /tmp
 	// This prevents OOMKills under high concurrency (10 concurrent uploads = 10MB not 100MB)
+	//nolint:gosec // G120: bounded by the MaxBytesReader above, which gosec's taint analysis cannot see
 	if err := r.ParseMultipartForm(maxMemoryPerUpload); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to parse multipart form")

@@ -389,15 +389,18 @@ func hasValidBucketBoundaries(name string) bool {
 	return isLowerAlphaNum(name[0]) && isLowerAlphaNum(name[len(name)-1])
 }
 
-// hasValidBucketCharacters validates all characters in bucket name
+// hasValidBucketCharacters validates all characters in bucket name. It walks
+// bytes, not runes: every byte of a multi-byte rune is >= 0x80 and so rejected,
+// where truncating the rune to a byte could turn it into a valid letter.
 func hasValidBucketCharacters(name string) bool {
-	for i, r := range name {
-		if !isLowerAlphaNum(byte(r)) && r != '-' {
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		if !isLowerAlphaNum(b) && b != '-' {
 			return false
 		}
 
 		// No consecutive hyphens
-		if i > 0 && r == '-' && name[i-1] == '-' {
+		if i > 0 && b == '-' && name[i-1] == '-' {
 			return false
 		}
 	}

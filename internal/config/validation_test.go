@@ -109,6 +109,7 @@ func TestBucketNameValidation(t *testing.T) {
 		{"ip address format", "192.168.1.1", false},
 		{"underscore", "my_bucket", false},
 		{"empty", "", false},
+		{"non-ascii rune whose low byte is a letter", "my-bšcket", false}, // byte('š') == 'a'
 	}
 
 	for _, tt := range tests {
