@@ -87,7 +87,7 @@ jobs:
         run: echo "COMMIT_SHORT=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
 
       - name: Run Trivy vulnerability scanner on built image (AMD64)
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'ghcr.io/smana/image-gallery:${{ env.COMMIT_SHORT }}-amd64'
           format: 'sarif'
@@ -96,7 +96,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Run Trivy vulnerability scanner on built image (ARM64)
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'ghcr.io/smana/image-gallery:${{ env.COMMIT_SHORT }}-arm64'
           format: 'sarif'
