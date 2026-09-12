@@ -234,6 +234,17 @@ func (c *Config) validateStorage() ValidationErrors {
 		})
 	}
 
+	errors = append(errors, c.validateStorageCredentialsAndLimits()...)
+
+	return errors
+}
+
+// validateStorageCredentialsAndLimits validates the production-credentials
+// guard and the configured upload size cap. Split out of validateStorage to
+// keep both functions' cyclomatic complexity under the gocyclo threshold.
+func (c *Config) validateStorageCredentialsAndLimits() ValidationErrors {
+	var errors ValidationErrors
+
 	// Validate access credentials for production environments
 	// Allow empty credentials for EKS Pod Identity / IAM roles
 	if c.Environment == "production" {

@@ -28,6 +28,10 @@ const (
 	statusError    = "error"
 	queryParamTrue = "true"
 	defaultUserID  = "default"
+	// contentTypeJPEGAlt is the nonstandard "image/jpg" variant some clients
+	// send instead of contentTypeJPEG; kept as a constant for the same
+	// goconst reason as contentTypeJPEG/contentTypePNG in handlers.go.
+	contentTypeJPEGAlt = "image/jpg"
 )
 
 //nolint:gocyclo // Handler with multiple response formats and filter logic
@@ -323,9 +327,9 @@ func (h *Handler) buildContentTypeBadge(img ImageResponse) string {
 // getFormatLabel returns human-readable format label for content type
 func (h *Handler) getFormatLabel(contentType string) string {
 	switch contentType {
-	case "image/jpeg", "image/jpg":
+	case contentTypeJPEG, contentTypeJPEGAlt:
 		return "JPEG"
-	case "image/png":
+	case contentTypePNG:
 		return "PNG"
 	case "image/gif":
 		return "GIF"

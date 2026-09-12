@@ -208,10 +208,15 @@ func (p *Processor) step(ctx context.Context, imageID int, name string, fn func(
 	return err
 }
 
+// formatPNG is the decoded image format name (as returned by
+// ImageProcessor.GetImageInfo) for PNG images, kept as a constant since the
+// bare string "png" also appears in this package's tests (goconst).
+const formatPNG = "png"
+
 // thumbnailFormat mirrors ImageProcessor.GenerateThumbnail's encoder choice.
 func thumbnailFormat(format string) (ext, contentType string) {
 	switch format {
-	case "png":
+	case formatPNG:
 		return ".png", "image/png"
 	case "gif":
 		return ".gif", "image/gif"

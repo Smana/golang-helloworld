@@ -179,11 +179,11 @@ func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
 		ext := strings.ToLower(filepath.Ext(img.StoragePath))
 		switch ext {
 		case ".jpg", ".jpeg":
-			w.Header().Set("Content-Type", "image/jpeg")
-		case ".png":
-			w.Header().Set("Content-Type", "image/png")
-		case ".gif":
-			w.Header().Set("Content-Type", "image/gif")
+			w.Header().Set("Content-Type", contentTypeJPEG)
+		case extPNG:
+			w.Header().Set("Content-Type", contentTypePNG)
+		case extGIF:
+			w.Header().Set("Content-Type", contentTypeGIF)
 		case ".webp":
 			w.Header().Set("Content-Type", "image/webp")
 		default:
@@ -237,11 +237,18 @@ const (
 	contentTypeJPEG = "image/jpeg"
 )
 
+// File extensions matched both here and in viewImageHandler's fallback
+// content-type switch above, kept as constants for the same goconst reason.
+const (
+	extPNG = ".png"
+	extGIF = ".gif"
+)
+
 func thumbnailContentType(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png":
+	case extPNG:
 		return contentTypePNG
-	case ".gif":
+	case extGIF:
 		return contentTypeGIF
 	default:
 		return contentTypeJPEG
