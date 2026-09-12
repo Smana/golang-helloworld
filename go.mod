@@ -10,6 +10,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/minio/minio-go/v7 v7.0.95
+	github.com/redis/go-redis/extra/redisotel/v9 v9.22.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.12.1
@@ -95,6 +96,7 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/redis/go-redis/extra/rediscmd/v9 v9.22.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.6 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect

@@ -183,6 +183,10 @@ github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgm
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 h1:o4JXh1EVt9k/+g42oCprj/FisM4qX9L3sZB3upGN2ZU=
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
+github.com/redis/go-redis/extra/rediscmd/v9 v9.22.0 h1:MQPzEEnpD0BMPufBLABnMYLJVwM7xi7vZ+srO8Nr0s8=
+github.com/redis/go-redis/extra/rediscmd/v9 v9.22.0/go.mod h1:eve0JFcLRwFVj3RA85rrrV5+UJ+K9LDyU7kf2UdSueM=
+github.com/redis/go-redis/extra/redisotel/v9 v9.22.0 h1:t5ul1Gl0o1rYQj5f5bK12G9xcg1niq2ON4yZFjvy1kA=
+github.com/redis/go-redis/extra/redisotel/v9 v9.22.0/go.mod h1:hcS9L2RBBjYXkrfSOF26ZGejgo+yOC+28ZD2fkk3sGs=
 github.com/redis/go-redis/v9 v9.22.0 h1:laDvpYXTJtZLloinw1fA5Kqd6HAEH2XKxOkG/PDq2F0=
 github.com/redis/go-redis/v9 v9.22.0/go.mod h1:y2g0Wj8rQvuK0ELM+oxSudcLtC09JScs98I/X9gRWY4=
 github.com/rs/xid v1.6.0 h1:fV591PaemRlL6JfRxGDEPl69wICngIQ3shQtzfy2gxU=
