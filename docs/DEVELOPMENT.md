@@ -68,10 +68,10 @@ atlas migrate apply --env local
 make build
 
 # Run the server
-./bin/server
+./bin/image-gallery serve
 
 # Or run directly with Go
-go run cmd/server/main.go
+go run ./cmd/image-gallery serve
 
 # Or use hot reload for development
 make dev
@@ -427,7 +427,7 @@ GO_ENV=production
 
 ```bash
 # Build optimized binary
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o server cmd/server/main.go
+CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o image-gallery ./cmd/image-gallery
 
 # Or use Docker
 docker build -t image-gallery .

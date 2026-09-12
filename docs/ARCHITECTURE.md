@@ -109,8 +109,8 @@ type Container struct {
 
 ```
 image-gallery/
-├── cmd/server/                 # Application entry point
-│   └── main.go                # Main function, container setup
+├── cmd/image-gallery/          # Application entry point
+│   └── main.go                # Role dispatch: serve, worker, loadgen
 ├── internal/
 │   ├── config/                # Configuration management
 │   │   ├── config.go          # Config structure and loading
@@ -127,9 +127,11 @@ image-gallery/
 │   │   │   ├── models/        # Database models
 │   │   │   ├── repository/    # Repository implementations
 │   │   │   └── migrations/    # Database migrations
-│   │   ├── storage/           # File storage implementations
-│   │   │   ├── minio.go       # MinIO/S3 implementation
-│   │   │   └── storage_test.go
+│   │   ├── storage/           # Object storage implementations
+│   │   │   ├── objectstore.go # ObjectStore interface, provider selection
+│   │   │   ├── s3store.go     # S3/MinIO implementation
+│   │   │   ├── gcsstore.go    # GCS implementation
+│   │   │   └── service.go     # Storage service wrapper
 │   │   ├── cache/             # Cache implementations
 │   │   │   ├── redis.go       # Valkey/Redis implementation
 │   │   │   └── cache_test.go
@@ -236,7 +238,7 @@ func NewContainer(cfg config.Config) (*Container, error) {
     // Wire all dependencies
     return &Container{
         ImageRepo:      repository.NewImageRepository(db),
-        StorageService: storage.NewMinIOClient(cfg.Storage),
+        StorageService: storage.NewObjectStore(ctx, cfg.Storage),
         CacheService:   cache.NewCacheService(redisClient),
         ImageService:   implementations.NewImageService(repo, storage, cache),
     }
@@ -264,16 +266,19 @@ func (r *ImageRepository) Create(ctx context.Context, image *domain.Image) error
 #### Storage Service
 
 ```go
-type MinIOClient struct {
-    client *minio.Client
-    bucket string
+// One interface, two backends, selected by STORAGE_PROVIDER.
+type ObjectStore interface {
+    Provider() string
+    Put(ctx context.Context, key, contentType string, r io.Reader, size int64, metadata map[string]string) error
+    Get(ctx context.Context, key string) (io.ReadCloser, error)
+    Stat(ctx context.Context, key string) (ObjectInfo, error)
+    Delete(ctx context.Context, key string) error
+    List(ctx context.Context, prefix string, max int) ([]ObjectInfo, error)
+    Health(ctx context.Context) error
 }
 
-func (m *MinIOClient) Upload(ctx context.Context, req UploadRequest) (*UploadResponse, error) {
-    // Upload to MinIO/S3
-    info, err := m.client.PutObject(ctx, m.bucket, req.Key, req.Reader, req.Size, opts)
-    // Handle response...
-}
+// NewObjectStore(ctx, cfg) returns *S3Store (minio-go) or *GCSStore
+// (cloud.google.com/go/storage) depending on cfg.Provider ("s3"|"gcs").
 ```
 
 #### Cache Service
@@ -392,6 +397,62 @@ sequenceDiagram
     H-->>C: JSON response
 ```
 
+## ⚙️ Async Processing (v2)
+
+```text
+loadgen ──HTTP──▶ web (main container) ──XADD job + traceparent──▶ Valkey stream
+ (Job/CLI)          │  UI + API, uploads                                 │
+                    │                                    XREADGROUP      ▼
+                    ├──▶ Postgres (images, status)  ◀── worker (sidecar, same image)
+                    └──▶ bucket (S3 or GCS) ◀──┘  thumbnails + metadata
+```
+
+| Role | Command | `service.name` |
+|---|---|---|
+| web | `image-gallery serve` | `xplane-image-gallery` |
+| worker | `image-gallery worker` | `xplane-image-gallery-worker` |
+| load generator | `image-gallery loadgen` | `image-gallery-loadgen` |
+
+### Upload flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant W as web
+    participant St as Storage
+    participant DB as Database
+    participant Q as Valkey stream
+
+    C->>W: POST /api/images
+    W->>St: store the original object
+    W->>DB: INSERT image, status=pending
+    W->>Q: XADD image-gallery:jobs (traceparent, image_id)
+    W-->>C: 201 response (does not wait for processing)
+```
+
+### Worker flow
+
+```mermaid
+sequenceDiagram
+    participant Q as Valkey stream (group: workers)
+    participant Wk as worker
+    participant St as Storage
+    participant DB as Database
+
+    Q->>Wk: XREADGROUP
+    Wk->>St: fetch original, build thumbnail
+    Wk->>St: store thumbnail
+    Wk->>DB: write metadata (dimensions, format), status=ready
+    Wk->>Q: XACK
+```
+
+A freshly uploaded image is `pending` until the worker processes it — its `/thumbnail` route
+serves the original in the meantime. Both the upload and the worker always write the object to
+storage *before* the row that points to it (the diagrams above), so the database never claims an
+object exists before it does; `/thumbnail` returns 502 only for a genuine storage failure, and 404
+only when the image row itself does not exist. Failures retry with backoff; exhausted jobs move to
+`image-gallery:jobs:dead`. Processing is idempotent by `image_id`.
+
 ## 🔄 Caching Strategy
 
 ### Cache-Aside Pattern
@@ -464,18 +525,19 @@ env "local" {
 
 ## 🏪 Storage Architecture
 
-### S3-Compatible Storage
+### S3-Compatible or GCS Storage
 
-The application supports both MinIO (development) and AWS S3 (production):
+The application supports MinIO (development), AWS S3 (production) and GCS, selected by `Provider`:
 
 ```go
 type StorageConfig struct {
-    Endpoint        string // localhost:9000 or s3.amazonaws.com
-    AccessKeyID     string // Empty for IAM roles
-    SecretAccessKey string // Empty for IAM roles
-    Bucket          string
-    Region          string
-    UseSSL          bool
+    Provider        string // "s3" (default) or "gcs"
+    Endpoint        string // localhost:9000 or s3.amazonaws.com (s3 only)
+    AccessKeyID     string // Empty for IAM roles (s3 only)
+    SecretAccessKey string // Empty for IAM roles (s3 only)
+    BucketName      string
+    Region          string // s3 only
+    UseSSL          bool   // s3 only
 }
 ```
 
