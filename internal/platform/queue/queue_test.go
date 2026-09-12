@@ -270,7 +270,7 @@ func TestGaugesAndReady(t *testing.T) {
 	}
 	gaugeReader := sdkmetric.NewManualReader() // a reader registers with ONE provider; the harness's is taken
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(gaugeReader))
-	if err := RegisterGauges(h.rdb, mp.Meter("q"), h.streamName(), "workers"); err != nil {
+	if _, err := RegisterGauges(h.rdb, mp.Meter("q"), h.streamName(), "workers"); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := NewProducer(h.rdb, h.opts...)

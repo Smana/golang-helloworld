@@ -17,28 +17,27 @@ import (
 //	queue.depth   entries not yet delivered to the group (XINFO GROUPS lag; XLEN also counts acked entries)
 //	queue.pending delivered but not acked
 //	queue.lag     age of the oldest pending entry, in seconds
-func RegisterGauges(rdb redis.UniversalClient, meter metric.Meter, stream, group string) error {
+//
+// Unregister the returned registration before closing rdb, or the final
+// collection on shutdown polls a closed client.
+func RegisterGauges(rdb redis.UniversalClient, meter metric.Meter, stream, group string) (metric.Registration, error) {
 	depth, err := meter.Int64ObservableGauge(obs.MetricQueueDepth, metric.WithUnit("{message}"),
 		metric.WithDescription("Entries not yet delivered to the consumer group"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pending, err := meter.Int64ObservableGauge(obs.MetricQueuePending, metric.WithUnit("{message}"),
 		metric.WithDescription("Entries delivered but not acknowledged"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lag, err := meter.Float64ObservableGauge(obs.MetricQueueLag, metric.WithUnit("s"),
 		metric.WithDescription("Age of the oldest pending entry"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	attrs := metric.WithAttributes(semconv.MessagingDestinationName(stream), semconv.MessagingConsumerGroupName(group))
-	// The returned metric.Registration is intentionally discarded: RegisterGauges'
-	// signature (the Task 10 contract other tasks build on) has no way to hand it
-	// back, and callers register gauges once for the worker process's entire
-	// lifetime with no call to Unregister, so there is nothing to do with it.
-	_, err = meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
+	return meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		groups, err := rdb.XInfoGroups(ctx, stream).Result()
@@ -65,5 +64,4 @@ func RegisterGauges(rdb redis.UniversalClient, meter metric.Meter, stream, group
 		o.ObserveFloat64(lag, age, attrs)
 		return nil
 	}, depth, pending, lag)
-	return err
 }

@@ -54,9 +54,12 @@ func RunWorker(ctx context.Context) error {
 
 	gaugeClient := redis.NewClient(&redis.Options{Addr: d.Cfg.Cache.Address, Password: d.Cfg.Cache.Password, DB: d.Cfg.Cache.Database})
 	defer func() { _ = gaugeClient.Close() }() //nolint:errcheck // best-effort close on shutdown
-	if err := queue.RegisterGauges(gaugeClient, otel.Meter("image-gallery/queue"), queue.DefaultStream, queue.DefaultGroup); err != nil {
+	gauges, err := queue.RegisterGauges(gaugeClient, otel.Meter("image-gallery/queue"), queue.DefaultStream, queue.DefaultGroup)
+	if err != nil {
 		return fmt.Errorf("queue gauges: %w", err)
 	}
+	// Deferred last, so it runs first: before gaugeClient closes and d.Close's final flush collects.
+	defer func() { _ = gauges.Unregister() }() //nolint:errcheck // best-effort on shutdown
 
 	hs := &http.Server{
 		Addr: envOr("WORKER_HEALTH_ADDR", ":8081"), Handler: worker.NewHealthHandler(consumer.Ready),
