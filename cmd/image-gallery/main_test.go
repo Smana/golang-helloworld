@@ -1,6 +1,19 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"image-gallery/internal/observability"
+)
+
+func TestRunReportsTheBuiltVersion(t *testing.T) {
+	defer func(v, d string) { version, observability.DefaultServiceVersion = v, d }(version, observability.DefaultServiceVersion)
+	version = "9.9.9-built"
+	run([]string{"help"})
+	if observability.DefaultServiceVersion != "9.9.9-built" {
+		t.Errorf("default service version = %q, want main.version %q", observability.DefaultServiceVersion, "9.9.9-built")
+	}
+}
 
 func TestRunDispatch(t *testing.T) {
 	if code := run([]string{"help"}); code != 0 {

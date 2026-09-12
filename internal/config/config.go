@@ -168,7 +168,7 @@ func Load() (*Config, error) {
 		},
 		Observability: ObservabilityConfig{
 			ServiceName:      getEnv("OTEL_SERVICE_NAME", "image-gallery"),
-			ServiceVersion:   getEnv("OTEL_SERVICE_VERSION", "1.3.0"),
+			ServiceVersion:   getEnv("OTEL_SERVICE_VERSION", ""), // empty: the built version (app.Bootstrap)
 			Environment:      getEnv("OTEL_DEPLOYMENT_ENVIRONMENT", goEnv),
 			PodName:          getEnv("POD_NAME", ""),
 			PodNamespace:     getEnv("POD_NAMESPACE", ""),

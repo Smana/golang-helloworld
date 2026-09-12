@@ -37,17 +37,7 @@ func Bootstrap(ctx context.Context, defaultService string) (*Deps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if os.Getenv("OTEL_SERVICE_NAME") == "" {
-		cfg.Observability.ServiceName = defaultService
-	}
-	oc := observability.Config{
-		ServiceName: cfg.Observability.ServiceName, ServiceVersion: cfg.Observability.ServiceVersion,
-		Environment: cfg.Observability.Environment, PodName: cfg.Observability.PodName, PodNamespace: cfg.Observability.PodNamespace,
-		TracesEndpoint: cfg.Observability.TracesEndpoint, TracesEnabled: cfg.Observability.TracesEnabled,
-		TracesSampler: cfg.Observability.TracesSampler, TracesSamplerArg: cfg.Observability.TracesSamplerArg,
-		MetricsEndpoint: cfg.Observability.MetricsEndpoint, MetricsEnabled: cfg.Observability.MetricsEnabled,
-		LogLevel: cfg.Logging.Level, LogFormat: cfg.Logging.Format,
-	}
+	oc := telemetryConfig(cfg, defaultService)
 	d := &Deps{Cfg: cfg, Logger: observability.NewLogger(oc)}
 	if d.OTel, err = observability.NewProvider(ctx, oc, d.Logger); err != nil {
 		return nil, fmt.Errorf("opentelemetry: %w", err)
@@ -74,6 +64,25 @@ func Bootstrap(ctx context.Context, defaultService string) (*Deps, error) {
 	}
 	d.Logger.GetZerolog().Info().Str("storage.provider", d.Store.Provider()).Msg("bootstrap complete")
 	return d, nil
+}
+
+// telemetryConfig maps the application configuration onto the telemetry one,
+// defaulting service.version to the version built into the binary.
+func telemetryConfig(cfg *config.Config, defaultService string) observability.Config {
+	if os.Getenv("OTEL_SERVICE_NAME") == "" {
+		cfg.Observability.ServiceName = defaultService
+	}
+	if cfg.Observability.ServiceVersion == "" {
+		cfg.Observability.ServiceVersion = observability.DefaultServiceVersion
+	}
+	return observability.Config{
+		ServiceName: cfg.Observability.ServiceName, ServiceVersion: cfg.Observability.ServiceVersion,
+		Environment: cfg.Observability.Environment, PodName: cfg.Observability.PodName, PodNamespace: cfg.Observability.PodNamespace,
+		TracesEndpoint: cfg.Observability.TracesEndpoint, TracesEnabled: cfg.Observability.TracesEnabled,
+		TracesSampler: cfg.Observability.TracesSampler, TracesSamplerArg: cfg.Observability.TracesSamplerArg,
+		MetricsEndpoint: cfg.Observability.MetricsEndpoint, MetricsEnabled: cfg.Observability.MetricsEnabled,
+		LogLevel: cfg.Logging.Level, LogFormat: cfg.Logging.Format,
+	}
 }
 
 // Close flushes telemetry and releases connections, whatever was opened.

@@ -50,7 +50,7 @@ All observability features are configured via environment variables. See `.env.e
 ```bash
 # Service identification
 # OTEL_SERVICE_NAME=image-gallery   # leave unset — each role names itself when this is empty
-OTEL_SERVICE_VERSION=1.3.0
+# OTEL_SERVICE_VERSION=2.0.0        # leave unset — defaults to the version built into the binary
 OTEL_DEPLOYMENT_ENVIRONMENT=development
 
 # Enable/disable features

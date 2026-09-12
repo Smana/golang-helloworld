@@ -23,9 +23,6 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{ .Version }}
-      - -X main.commit={{ .Commit }}
-      - -X main.date={{ .Date }}
-      - -X main.builtBy=goreleaser
 
 archives:
   - id: image-gallery

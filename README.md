@@ -78,7 +78,7 @@ The full reference lives in `.env.example`; these are the variables new or most 
 | `POD_NAME` | *(empty)* | `k8s.pod.name` resource attribute (Downward API in-cluster) |
 | `POD_NAMESPACE` | *(empty)* | `k8s.namespace.name` resource attribute |
 | `OTEL_SERVICE_NAME` | unset — per-role default: `xplane-image-gallery` (serve), `xplane-image-gallery-worker` (worker), `image-gallery-loadgen` (loadgen) | setting it explicitly gives every role the same `service.name`, defeating the per-role default |
-| `OTEL_SERVICE_VERSION` | `1.3.0` | |
+| `OTEL_SERVICE_VERSION` | unset — the version built into the binary (`dev` for local builds) | setting it overrides the built version |
 | `OTEL_DEPLOYMENT_ENVIRONMENT` | value of `GO_ENV` | |
 | `OTEL_TRACES_ENABLED` | `true` | |
 | `OTEL_TRACES_SAMPLER` | `always_on` | |

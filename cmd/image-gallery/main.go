@@ -18,6 +18,7 @@ import (
 
 	"image-gallery/internal/app"
 	"image-gallery/internal/loadgen"
+	"image-gallery/internal/observability"
 )
 
 func init() {
@@ -32,6 +33,9 @@ func init() {
 		slog.Warn("Failed to set automatic memory limit", "error", err)
 	}
 }
+
+// version is the release version, linked in by -X main.version (.goreleaser.yml).
+var version = "dev"
 
 // cmdServe is the default subcommand, used both to pick it and to compare
 // against it below.
@@ -48,6 +52,7 @@ Commands:
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	observability.DefaultServiceVersion = version
 	cmd := cmdServe
 	if len(args) > 0 {
 		//nolint:staticcheck // args feeds Task 13 (worker) / Task 15 (loadgen) subcommand flags

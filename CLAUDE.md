@@ -133,7 +133,7 @@ The application includes comprehensive observability using OpenTelemetry with su
 ##### Development (Local)
 ```bash
 # OTEL_SERVICE_NAME=image-gallery   # leave unset for the per-role default
-OTEL_SERVICE_VERSION=1.3.0
+# OTEL_SERVICE_VERSION=2.0.0        # leave unset for the version built into the binary
 OTEL_DEPLOYMENT_ENVIRONMENT=development
 OTEL_TRACES_ENABLED=true
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=localhost:4318
@@ -148,7 +148,7 @@ LOG_FORMAT=json
 ##### Kubernetes with VictoriaMetrics Operator
 ```bash
 # OTEL_SERVICE_NAME=image-gallery   # leave unset for the per-role default
-OTEL_SERVICE_VERSION=1.3.0
+# OTEL_SERVICE_VERSION=2.0.0        # leave unset for the version built into the binary
 OTEL_DEPLOYMENT_ENVIRONMENT=production
 OTEL_TRACES_ENABLED=true
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=victoriametrics-victoria-logs-single-server:4318
