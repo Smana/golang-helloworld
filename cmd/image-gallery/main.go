@@ -57,6 +57,8 @@ func run(args []string) int {
 	switch cmd {
 	case cmdServe:
 		return exitCode(app.RunServe(ctx))
+	case "worker":
+		return exitCode(app.RunWorker(ctx))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
