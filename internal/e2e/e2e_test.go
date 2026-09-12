@@ -73,7 +73,7 @@ func TestEndToEndTraceAndInstrumentContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{Environment: "test", DatabaseURL: tc.GetDatabaseURL(),
+	cfg := &config.Config{Environment: "test", DatabaseURL: tc.GetDatabaseURL(), DemoControlsEnabled: true,
 		Storage: config.StorageConfig{Provider: "s3", BucketName: "test-images", MaxUploadSize: 10 << 20},
 		Cache:   config.CacheConfig{Enabled: true, Address: tc.RedisEndpoint, DefaultTTL: time.Hour, DialTimeout: 5 * time.Second, ReadTimeout: 3 * time.Second}}
 	rdb, err := cache.NewInstrumentedClient(cfg.Cache)

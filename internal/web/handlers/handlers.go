@@ -115,9 +115,12 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/", h.getSettingsHandler)         // Get user settings
 			r.Put("/", h.updateSettingsHandler)      // Update user settings
 			r.Post("/reset", h.resetSettingsHandler) // Reset to defaults
-			r.Get("/demo", h.getDemoHandler)
-			r.Put("/demo", h.updateDemoHandler)
-			r.Post("/demo/reset", h.resetDemoHandler)
+			// Demo controls: h.demo is nil when DEMO_CONTROLS_ENABLED=false
+			if h.demo != nil {
+				r.Get("/demo", h.getDemoHandler)
+				r.Put("/demo", h.updateDemoHandler)
+				r.Post("/demo/reset", h.resetDemoHandler)
+			}
 		})
 		// Tags endpoints
 		r.Route("/tags", func(r chi.Router) {
@@ -466,7 +469,7 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
                         </button>
                     </div>
 
-                    <fieldset class="border border-amber-300 rounded-lg p-4 mt-6">
+                    <fieldset id="demoControls" class="border border-amber-300 rounded-lg p-4 mt-6">
                         <legend class="px-2 text-sm font-semibold text-amber-700">Demo controls (fault injection)</legend>
                         <div class="grid grid-cols-2 gap-3 text-sm">
                             <label>Latency (ms)<input id="demoLatencyMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
@@ -709,6 +712,7 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
         async function loadDemoControls() {
             const r = await fetch('/api/settings/demo');
             if (r.ok) fillDemoControls(await r.json());
+            else if (r.status === 404) document.getElementById('demoControls').hidden = true; // DEMO_CONTROLS_ENABLED=false
         }
         async function saveDemoControls() {
             const body = { latency_routes: document.getElementById('demoLatencyRoutes').value.split(',').map(s => s.trim()).filter(Boolean) };

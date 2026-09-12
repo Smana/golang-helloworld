@@ -187,3 +187,13 @@ func TestLoadStorageProvider(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadDemoControlsEnabled(t *testing.T) {
+	t.Setenv("GO_ENV", "test")
+	for value, want := range map[string]bool{"": true, "true": true, "false": false} {
+		t.Setenv("DEMO_CONTROLS_ENABLED", value)
+		config, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, want, config.DemoControlsEnabled, "DEMO_CONTROLS_ENABLED=%q", value)
+	}
+}

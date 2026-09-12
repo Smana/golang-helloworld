@@ -20,6 +20,10 @@ type Config struct {
 	Logging       *LoggingConfig
 	Server        *ServerConfig
 	Observability ObservabilityConfig
+	// DemoControlsEnabled (DEMO_CONTROLS_ENABLED, default true) serves the demo
+	// fault-injection endpoints and builds the injector. The app has no
+	// authentication, so this is a switch, not access control.
+	DemoControlsEnabled bool
 }
 
 // StorageConfig holds object storage configuration
@@ -175,6 +179,7 @@ func Load() (*Config, error) {
 			MetricsEndpoint:  getEnv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "localhost:4318"),
 			MetricsEnabled:   parseBoolOrDefault(getEnv("OTEL_METRICS_ENABLED", "true"), true),
 		},
+		DemoControlsEnabled: parseBoolOrDefault(getEnv("DEMO_CONTROLS_ENABLED", "true"), true),
 	}
 
 	// Validate configuration before returning

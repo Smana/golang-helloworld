@@ -77,8 +77,15 @@ func RunWorker(ctx context.Context) error {
 	return runErr
 }
 
-// workerFaults wires the demo-controls fault injector into the processor.
-func workerFaults(c *services.Container) worker.Faults { return c.DemoInjector() }
+// workerFaults wires the demo-controls fault injector into the processor. A
+// nil *faults.Injector (DEMO_CONTROLS_ENABLED=false) must become a nil
+// interface, or the processor would call through it and panic.
+func workerFaults(c *services.Container) worker.Faults {
+	if inj := c.DemoInjector(); inj != nil {
+		return inj
+	}
+	return nil
+}
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

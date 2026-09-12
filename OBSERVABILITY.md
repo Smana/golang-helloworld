@@ -188,7 +188,8 @@ worker's consumer span → its storage and database child spans — one trace ID
 ## Faults
 
 The Demo settings group (`GET`/`PUT /api/settings/demo`, `POST /api/settings/demo/reset`) injects
-faults for the observability demo. Every control is off by default:
+faults for the observability demo. The endpoints exist while `DEMO_CONTROLS_ENABLED` is `true`
+(the default); `false` removes them and injects nothing. Every control is off by default:
 
 | Control | Effect |
 |---|---|

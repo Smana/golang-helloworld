@@ -192,6 +192,18 @@ func (c *Container) initializeServices() error {
 		c.redisClient,
 	)
 
+	if c.config.DemoControlsEnabled {
+		c.initializeDemoControls()
+	}
+
+	log.Println("Dependency injection container initialized successfully")
+	return nil
+}
+
+// initializeDemoControls builds the fault injector and hooks the slow-DB fault
+// into the image service. Skipped when DEMO_CONTROLS_ENABLED=false, leaving
+// DemoService and DemoInjector nil.
+func (c *Container) initializeDemoControls() {
 	var demoCache faults.Cache // a nil *RedisClient inside a non-nil interface would panic
 	if c.redisClient != nil {
 		demoCache = c.redisClient
@@ -203,9 +215,6 @@ func (c *Container) initializeServices() error {
 			_ = implementations.SleepInDB(ctx, c.db, d.Seconds()) //nolint:errcheck // best-effort demo delay; a failure here must not break the list query
 		}))
 	}
-
-	log.Println("Dependency injection container initialized successfully")
-	return nil
 }
 
 // Getters for accessing services

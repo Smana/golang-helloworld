@@ -74,6 +74,7 @@ The full reference lives in `.env.example`; these are the variables new or most 
 | `CACHE_ADDRESS` | `localhost:6379` | Valkey address — also the `image-gallery:jobs` queue the worker reads |
 | `WORKER_HEALTH_ADDR` | `:8081` | worker's liveness/readiness port |
 | `WORKER_CONCURRENCY` | `2` | worker's concurrent job handlers |
+| `DEMO_CONTROLS_ENABLED` | `true` | `false` removes the `/api/settings/demo` endpoints and injects no faults; a switch, not access control |
 | `POD_NAME` | *(empty)* | `k8s.pod.name` resource attribute (Downward API in-cluster) |
 | `POD_NAMESPACE` | *(empty)* | `k8s.namespace.name` resource attribute |
 | `OTEL_SERVICE_NAME` | unset — per-role default: `xplane-image-gallery` (serve), `xplane-image-gallery-worker` (worker), `image-gallery-loadgen` (loadgen) | setting it explicitly gives every role the same `service.name`, defeating the per-role default |
