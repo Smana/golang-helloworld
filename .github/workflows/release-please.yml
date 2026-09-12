@@ -46,6 +46,13 @@ jobs:
         with:
           fetch-depth: 0  # GoReleaser needs full git history
 
+      # Without this GoReleaser builds with whatever Go the runner ships.
+      # GO_VERSION is a minor version so the latest patch is used; see ci.yml.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:

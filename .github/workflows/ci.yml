@@ -7,6 +7,10 @@ on:
     branches: [ main ]
 
 env:
+  # A minor version on purpose, so setup-go resolves the latest 1.26.x patch.
+  # go-version-file: go.mod would read "go 1.26.0" as an exact version and build
+  # without any 1.26.x security release. Keep build-push.yml and
+  # release-please.yml on the same value.
   GO_VERSION: "1.26"
 
 jobs:
@@ -51,26 +55,24 @@ jobs:
       # with no flags still shows the backlog. One consequence to know about:
       # on a push to main the merge base is main itself, so this step only
       # really bites on pull requests -- which is where the merge gate is.
-      - name: Run Go linting
-        uses: dagger/dagger-for-github@v7
+      #
+      # Plain steps rather than the Dagger module: its image was golang:latest,
+      # so the toolchain floated even with the linter pinned. setup-go also
+      # exports GOTOOLCHAIN=local, so a go.mod that outgrows GO_VERSION fails
+      # here, on the pull request, instead of in the release job after merge.
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          version: "latest"
-          module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,run,github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2,run,--new-from-merge-base=origin/main"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run Go linting
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --new-from-merge-base=origin/main
 
       - name: Run Go tests
-        uses: dagger/dagger-for-github@v7
-        with:
-          version: "latest"
-          module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,test,./...,--coverprofile=coverage.out,--race,--short"
+        run: go test ./... -coverprofile=coverage.out -race -short
 
       - name: Run vulnerability scan with govulncheck
-        uses: dagger/dagger-for-github@v7
-        with:
-          version: "latest"
-          module: "github.com/sagikazarmark/daggerverse/go@v0.9.0"
-          call: "exec --src=. --args=go,run,golang.org/x/vuln/cmd/govulncheck@latest,./..."
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 
       - name: Upload test coverage

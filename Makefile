@@ -42,17 +42,13 @@ fmt:
 	@echo "Formatting code..."
 	go fmt ./...
 
-# Lint code (using Dagger for consistency with CI)
+# Lint code with the same pinned golangci-lint and merge-base scope as CI.
+# Keep GOLANGCI_LINT_VERSION in step with .github/workflows/ci.yml.
+GOLANGCI_LINT_VERSION := v2.13.2
 lint:
-	@echo "Running linting with Dagger (matches CI environment)..."
-	@if command -v dagger > /dev/null; then \
-		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
-			--src=. \
-			--args=go,run,github.com/golangci/golangci-lint/cmd/golangci-lint@latest,run; \
-	else \
-		echo "Dagger not installed. Run 'make install-tools' first"; \
-		exit 1; \
-	fi
+	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (matches CI)..."
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) \
+		run --new-from-merge-base=origin/main
 
 # Vet code
 vet:
@@ -86,7 +82,7 @@ soak:
 install-tools:
 	@echo "Installing development tools..."
 	go install github.com/air-verse/air@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "Installing Atlas CLI..."
 	@if ! command -v atlas > /dev/null; then \
 		curl -sSf https://atlasgo.sh | sh -s -- --yes; \
@@ -117,7 +113,7 @@ vulncheck:
 	@if command -v dagger > /dev/null; then \
 		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
 			--src=. \
-			--args=go,run,golang.org/x/vuln/cmd/govulncheck@latest,./...; \
+			--args=go,run,golang.org/x/vuln/cmd/govulncheck@v1.8.0,./...; \
 	else \
 		echo "Dagger not installed. Run 'make install-tools' first"; \
 		exit 1; \
