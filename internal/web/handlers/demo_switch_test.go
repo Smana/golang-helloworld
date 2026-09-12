@@ -23,6 +23,30 @@ func demoSwitchRoutes(t *testing.T, enabled bool) (http.Handler, *services.Conta
 	return NewWithContainer(c).Routes(), c
 }
 
+func registeredRoutes(t *testing.T, routes http.Handler) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	_ = chi.Walk(routes.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error { //nolint:errcheck // the walk callback never fails
+		out[method+" "+route] = true
+		return nil
+	})
+	return out
+}
+
+// GET /api/images/{id} looked the segment up as a storage path and answered
+// with /api/images/<storage path>/view, a URL the numeric /{id}/view route
+// can never match. Nothing called it, so it is gone.
+func TestNoStoragePathImageLookupRoute(t *testing.T) {
+	routes, _ := demoSwitchRoutes(t, false)
+	got := registeredRoutes(t, routes)
+	if got["GET /api/images/{id}"] {
+		t.Error("GET /api/images/{id} is registered")
+	}
+	if !got["GET /api/images/{id}/view"] || !got["DELETE /api/images/{id}"] {
+		t.Errorf("sibling image routes missing: %v", got)
+	}
+}
+
 func TestDemoControlsSwitchedOff(t *testing.T) {
 	routes, c := demoSwitchRoutes(t, false)
 	if c.DemoInjector() != nil || c.DemoService() != nil {
@@ -47,12 +71,11 @@ func TestDemoControlsSwitchedOn(t *testing.T) {
 		t.Error("demo controls are on, but no injector was built")
 	}
 	var demoRoutes int
-	_ = chi.Walk(routes.(chi.Routes), func(_, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error { //nolint:errcheck // the walk callback never fails
-		if strings.HasPrefix(route, "/api/settings/demo") {
+	for r := range registeredRoutes(t, routes) {
+		if strings.Contains(r, " /api/settings/demo") {
 			demoRoutes++
 		}
-		return nil
-	})
+	}
 	if demoRoutes != 3 {
 		t.Errorf("registered %d demo routes, want 3", demoRoutes)
 	}

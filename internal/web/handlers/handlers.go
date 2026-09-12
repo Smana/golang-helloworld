@@ -104,8 +104,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/images", func(r chi.Router) {
 			r.Get("/", h.listImagesHandler)
-			r.Post("/", h.uploadImagesHandler) // Upload images endpoint
-			r.Get("/{id}", h.getImageHandler)
+			r.Post("/", h.uploadImagesHandler)                // Upload images endpoint
 			r.Get("/{id}/view", h.viewImageHandler)           // Proxy endpoint for viewing images
 			r.Get("/{id}/thumbnail", h.thumbnailImageHandler) // Thumbnail, or the original until the worker is done
 			r.Delete("/{id}", h.deleteImageHandler)           // Delete image endpoint

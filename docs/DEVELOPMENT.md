@@ -442,7 +442,6 @@ The application exposes RESTful APIs for image management:
 
 - `GET /api/images` - List images with pagination
 - `POST /api/images` - Upload new image
-- `GET /api/images/:id` - Get specific image
 - `PUT /api/images/:id` - Update image metadata
 - `DELETE /api/images/:id` - Delete image
 

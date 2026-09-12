@@ -315,7 +315,6 @@ For local testing without VictoriaMetrics/VictoriaTraces, you can:
 ### API Endpoints
 - `GET /api/images` - List images with pagination
 - `POST /api/images` - Upload new image
-- `GET /api/images/:id` - Get specific image
 - `GET /api/images/:id/view` - View image (proxy endpoint)
 - `PUT /api/images/:id` - Update image metadata
 - `DELETE /api/images/:id` - Delete image

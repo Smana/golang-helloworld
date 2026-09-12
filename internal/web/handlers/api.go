@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"image-gallery/internal/domain/image"
 	"image-gallery/internal/domain/settings"
@@ -446,64 +445,6 @@ func (h *Handler) renderJSONResponse(w http.ResponseWriter, images []ImageRespon
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-	}
-}
-
-func (h *Handler) getImageHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	imagePath := chi.URLParam(r, "id")
-
-	// Create child span for this handler
-	ctx, span := h.startSpan(ctx, "getImageHandler",
-		attribute.String("handler", "get_image"),
-		attribute.String("image.path", imagePath),
-	)
-	defer h.endSpan(span)
-
-	// Check if image exists
-	exists, err := h.storageService.Exists(ctx, imagePath)
-	if err != nil {
-		h.handleError(ctx, span, err, "Error checking image existence", "failed to check existence", imagePath)
-		http.Error(w, "Error checking image", http.StatusInternalServerError)
-		return
-	}
-
-	if !exists {
-		h.setSpanStatus(span, codes.Error, "image not found", attribute.Bool("image.found", false))
-		http.Error(w, "Image not found", http.StatusNotFound)
-		return
-	}
-
-	h.setSpanAttributes(span, attribute.Bool("image.found", true))
-
-	// Serve the image through the app's own proxy endpoint (no presigned URLs).
-	viewURL := fmt.Sprintf("/api/images/%s/view", imagePath)
-
-	// Get image metadata
-	fileInfo, err := h.storageService.GetFileInfo(ctx, imagePath)
-	if err != nil {
-		h.handleError(ctx, span, err, "Failed to get image info", "failed to get file info", imagePath)
-		http.Error(w, "Failed to get image info", http.StatusInternalServerError)
-		return
-	}
-
-	h.setSpanAttributes(span,
-		attribute.Int64("image.size", fileInfo.Size),
-		attribute.String("image.content_type", fileInfo.ContentType),
-	)
-	h.addSpanEvent(span, "image_info_retrieved")
-	h.setSpanStatus(span, codes.Ok, "")
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(ImageResponse{
-		ID:         imagePath,
-		URL:        viewURL,
-		Size:       fileInfo.Size,
-		UploadTime: time.Unix(fileInfo.LastModified, 0).Format("2006-01-02 15:04:05"),
-	}); err != nil {
-		h.handleError(ctx, span, err, "Failed to encode response", "", "")
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
 	}
 }
 

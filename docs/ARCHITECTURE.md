@@ -376,7 +376,7 @@ sequenceDiagram
     participant R as Repository
     participant DB as Database
     
-    C->>H: GET /api/images/123
+    C->>H: GET /api/images/123/view
     H->>S: GetImage(123)
     S->>Ca: GetImage(123)
     

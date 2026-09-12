@@ -95,7 +95,6 @@ which the middleware returns from before creating a span or recording any metric
 
 - `GET /api/images` - list images (pagination, tag filters)
 - `POST /api/images` - upload images
-- `GET /api/images/{id}` - image metadata
 - `GET /api/images/{id}/view` - proxy the original (no presigned URLs)
 - `GET /api/images/{id}/thumbnail` - proxy the worker's thumbnail, or the original while `pending`/`processing`/`failed`
 - `DELETE /api/images/{id}` - delete image
@@ -168,7 +167,7 @@ generator's top rate (25 req/s, 100 % sampling).
 
 | Span | Kind | Where | Key attributes |
 |---|---|---|---|
-| `<METHOD> <route>` (e.g. `GET /api/images/{id}`) | SERVER | web middleware | `http.request.method`, `http.route`, `http.response.status_code` |
+| `<METHOD> <route>` (e.g. `GET /api/images/{id}/view`) | SERVER | web middleware | `http.request.method`, `http.route`, `http.response.status_code` |
 | `send image-gallery:jobs` | PRODUCER | web queue producer | `messaging.system`, `messaging.destination.name`, `messaging.operation.type=send`, `messaging.message.id`, `image.id`, `job.type` |
 | `process image-gallery:jobs` | CONSUMER (child of the propagated context, plus a link to it) | worker | the above plus `messaging.consumer.group.name`, `messaging.operation.type=process` |
 | `job.attempt` | INTERNAL, one per attempt | worker | `job.attempt`, `error.type` |
