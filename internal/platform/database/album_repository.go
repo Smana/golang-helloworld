@@ -267,7 +267,8 @@ func (r *albumRepository) GetAlbumImages(ctx context.Context, albumID int, pagin
 
 	query := `
 		SELECT i.id, i.filename, i.original_filename, i.content_type, i.file_size,
-			   i.storage_path, i.thumbnail_path, i.width, i.height, i.uploaded_at,
+			   i.storage_path, i.thumbnail_path, i.status, i.processing_error, i.processed_at,
+			   i.width, i.height, i.uploaded_at,
 			   i.metadata, i.created_at, i.updated_at
 		FROM images i
 		INNER JOIN image_albums ia ON i.id = ia.image_id

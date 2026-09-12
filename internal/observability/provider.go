@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/metric"
@@ -15,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -26,104 +28,113 @@ type Provider struct {
 	config         Config
 }
 
-// NewProvider creates and initializes a new OpenTelemetry provider
+// telemetryScope is the meter scope for the SDK self-observation counters.
+const telemetryScope = "image-gallery/telemetry"
+
+// NewProvider builds OTLP/HTTP exporters from config and wires the SDK.
 func NewProvider(ctx context.Context, config Config, logger *Logger) (*Provider, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	var traceExp sdktrace.SpanExporter
+	if config.TracesEnabled {
+		exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(config.TracesEndpoint))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create trace exporter: %w", err)
+		}
+		traceExp = exp
+	}
+	var reader sdkmetric.Reader
+	if config.MetricsEnabled {
+		exp, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(config.MetricsEndpoint))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create metric exporter: %w", err)
+		}
+		reader = sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(15*time.Second))
+	}
+	return NewProviderWith(ctx, config, logger, traceExp, reader)
+}
 
-	// Set OTEL error handler to use structured logging
+// NewProviderWith wires the SDK around a span exporter and a metric reader; a nil
+// one disables that signal. Metrics come first so the span counters exist
+// before the first span ends.
+func NewProviderWith(ctx context.Context, config Config, logger *Logger, traceExp sdktrace.SpanExporter, reader sdkmetric.Reader) (*Provider, error) {
 	if logger != nil {
 		otel.SetErrorHandler(otel.ErrorHandlerFunc(logger.OTELErrorHandler()))
 	}
-
-	// Create resource with service information
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName(config.ServiceName),
-			semconv.ServiceVersion(config.ServiceVersion),
-			semconv.DeploymentEnvironment(config.Environment),
-		),
-		resource.WithFromEnv(),      // Discover and provide attributes from OTEL_RESOURCE_ATTRIBUTES
-		resource.WithTelemetrySDK(), // Discover and provide information about the OpenTelemetry SDK used
-		resource.WithHost(),         // Discover and provide host information
-		resource.WithOS(),           // Discover and provide OS information
-		resource.WithProcess(),      // Discover and provide process information
-	)
+	res, err := buildResource(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
+	p := &Provider{config: config}
 
-	p := &Provider{
-		config: config,
-	}
-
-	// Initialize tracer provider
-	if config.TracesEnabled {
-		tp, err := initTracerProvider(ctx, res, config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize tracer provider: %w", err)
+	if reader != nil {
+		p.meterProvider = sdkmetric.NewMeterProvider(
+			sdkmetric.WithResource(res),
+			sdkmetric.WithReader(reader),
+			sdkmetric.WithExemplarFilter(exemplar.TraceBasedFilter),
+			sdkmetric.WithView(createExponentialHistogramView()),
+		)
+		otel.SetMeterProvider(p.meterProvider)
+		// Go runtime metrics (go.memory.used, go.memory.limit, go.goroutine.count, …): the saturation/OOM story.
+		if err := runtime.Start(runtime.WithMeterProvider(p.meterProvider), runtime.WithMinimumReadMemStatsInterval(15*time.Second)); err != nil {
+			return nil, fmt.Errorf("failed to start runtime metrics: %w", err)
 		}
-		p.tracerProvider = tp
-		otel.SetTracerProvider(tp)
 	}
 
-	// Initialize meter provider
-	if config.MetricsEnabled {
-		mp, err := initMeterProvider(ctx, res, config)
+	if traceExp != nil {
+		meter := otel.Meter(telemetryScope) // no-op when metrics are disabled
+		ended, err := meter.Int64Counter(MetricSpansEnded, metric.WithUnit("{span}"), metric.WithDescription("Sampled spans that ended"))
 		if err != nil {
-			// Clean up tracer provider if metrics fail
-			if p.tracerProvider != nil {
-				if shutdownErr := p.tracerProvider.Shutdown(ctx); shutdownErr != nil {
-					return nil, fmt.Errorf("failed to initialize meter provider: %w (tracer shutdown also failed: %v)", err, shutdownErr)
-				}
-			}
-			return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
+			return nil, err
 		}
-		p.meterProvider = mp
-		otel.SetMeterProvider(mp)
+		exported, err := meter.Int64Counter(MetricSpansExported, metric.WithUnit("{span}"), metric.WithDescription("Spans handed to the exporter, by outcome"))
+		if err != nil {
+			return nil, err
+		}
+		sampler, err := createSampler(config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create sampler: %w", err)
+		}
+		// Queue sized for 100 % sampling at 25 req/s (~20 spans/request => ~500 spans/s):
+		// 8192 spans is ~16 s of headroom, a bounded few MiB; overflow is counted, not hidden.
+		p.tracerProvider = sdktrace.NewTracerProvider(
+			sdktrace.WithResource(res),
+			sdktrace.WithSampler(sampler),
+			sdktrace.WithSpanProcessor(spanEndCounter{ended: ended}),
+			sdktrace.WithBatcher(countingExporter{SpanExporter: traceExp, exported: exported},
+				sdktrace.WithBatchTimeout(time.Second),
+				sdktrace.WithMaxExportBatchSize(1024),
+				sdktrace.WithMaxQueueSize(8192),
+				sdktrace.WithExportTimeout(10*time.Second),
+			),
+		)
+		otel.SetTracerProvider(p.tracerProvider)
 	}
 
-	// Set global propagator to W3C Trace Context and Baggage
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	return p, nil
 }
 
-// initTracerProvider creates and configures a tracer provider with OTLP exporter
-func initTracerProvider(ctx context.Context, res *resource.Resource, config Config) (*sdktrace.TracerProvider, error) {
-	// Create OTLP HTTP trace exporter
-	// WithEndpointURL already specifies the scheme (http:// or https://), so WithInsecure() is not needed
-	traceExporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpointURL(config.TracesEndpoint),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
+func buildResource(ctx context.Context, c Config) (*resource.Resource, error) {
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(c.ServiceName),
+		semconv.ServiceVersion(c.ServiceVersion),
+		semconv.DeploymentEnvironmentNameKey.String(c.Environment),
 	}
-
-	// Create sampler based on configuration
-	sampler, err := createSampler(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sampler: %w", err)
+	if c.PodName != "" {
+		attrs = append(attrs, semconv.K8SPodName(c.PodName))
 	}
-
-	// Create tracer provider with batch span processor
-	// Limit queue size to prevent memory accumulation under sustained load
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(traceExporter,
-			sdktrace.WithBatchTimeout(2*time.Second),   // Export more frequently (5s→2s)
-			sdktrace.WithMaxExportBatchSize(256),       // Smaller batches (512→256)
-			sdktrace.WithMaxQueueSize(256),             // Limit queue to prevent OOMKills
-			sdktrace.WithExportTimeout(10*time.Second), // Timeout slow exports
-		),
-		sdktrace.WithSampler(sampler),
+	if c.PodNamespace != "" {
+		attrs = append(attrs, semconv.K8SNamespaceName(c.PodNamespace))
+	}
+	return resource.New(ctx,
+		resource.WithAttributes(attrs...),
+		resource.WithFromEnv(), // OTEL_RESOURCE_ATTRIBUTES, e.g. cloud.provider=gcp from the cluster patch
+		resource.WithTelemetrySDK(),
+		resource.WithHost(),
+		resource.WithProcess(),
 	)
-
-	return tp, nil
 }
 
 // createSampler creates a trace sampler based on configuration
@@ -134,50 +145,29 @@ func createSampler(config Config) (sdktrace.Sampler, error) {
 	case SamplerAlwaysOff:
 		return sdktrace.NeverSample(), nil
 	case SamplerTraceIDRatio:
-		ratio, err := strconv.ParseFloat(config.TracesSamplerArg, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sampler arg: %w", err)
-		}
-		return sdktrace.TraceIDRatioBased(ratio), nil
+		return ratioSampler(config.TracesSamplerArg)
 	case SamplerParentBasedAlwaysOn:
 		return sdktrace.ParentBased(sdktrace.AlwaysSample()), nil
 	case SamplerParentBasedAlwaysOff:
 		return sdktrace.ParentBased(sdktrace.NeverSample()), nil
 	case SamplerParentBasedTraceIDRatio:
-		ratio, err := strconv.ParseFloat(config.TracesSamplerArg, 64)
+		root, err := ratioSampler(config.TracesSamplerArg)
 		if err != nil {
-			return nil, fmt.Errorf("invalid sampler arg: %w", err)
+			return nil, err
 		}
-		return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio)), nil
+		return sdktrace.ParentBased(root), nil
 	default:
 		return nil, fmt.Errorf("unknown sampler type: %s", config.TracesSampler)
 	}
 }
 
-// initMeterProvider creates and configures a meter provider with OTLP exporter
-func initMeterProvider(ctx context.Context, res *resource.Resource, config Config) (*sdkmetric.MeterProvider, error) {
-	// Create OTLP HTTP metric exporter
-	// WithEndpointURL already specifies the scheme (http:// or https://), so WithInsecure() is not needed
-	metricExporter, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpointURL(config.MetricsEndpoint),
-	)
+// ratioSampler parses arg as the ratio of a TraceIDRatioBased sampler.
+func ratioSampler(arg string) (sdktrace.Sampler, error) {
+	ratio, err := strconv.ParseFloat(arg, 64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create metric exporter: %w", err)
+		return nil, fmt.Errorf("invalid sampler arg: %w", err)
 	}
-
-	// Create meter provider with periodic reader, exemplar filter, and views for exponential histograms
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
-			sdkmetric.WithInterval(30*time.Second), // Export metrics every 30 seconds
-		)),
-		// Enable trace-based exemplar sampling - only samples measurements from sampled traces
-		sdkmetric.WithExemplarFilter(exemplar.TraceBasedFilter),
-		// Configure exponential histograms for all histogram metrics
-		sdkmetric.WithView(createExponentialHistogramView()),
-	)
-
-	return mp, nil
+	return sdktrace.TraceIDRatioBased(ratio), nil
 }
 
 // createExponentialHistogramView creates a view that converts all histograms to exponential histograms with exemplars

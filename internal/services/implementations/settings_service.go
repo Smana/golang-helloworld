@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"image-gallery/internal/domain/settings"
+	obs "image-gallery/internal/observability"
 	"image-gallery/internal/platform/cache"
 
 	"go.opentelemetry.io/otel"
@@ -27,66 +28,31 @@ type SettingsServiceImpl struct {
 	cache *cache.RedisClient // can be nil
 
 	// Observability
-	tracer               trace.Tracer
-	settingsReadCounter  metric.Int64Counter
-	settingsWriteCounter metric.Int64Counter
-	cacheHitCounter      metric.Int64Counter
-	cacheMissCounter     metric.Int64Counter
+	tracer       trace.Tracer
+	settingsOps  metric.Int64Counter
+	cacheLookups metric.Int64Counter
 }
 
 // NewSettingsService creates a new settings service implementation
+//
+//nolint:errcheck // instrument names are constants; the SDK returns a usable instrument alongside any error
 func NewSettingsService(
 	repo settings.Repository,
-	cache *cache.RedisClient,
+	redisCache *cache.RedisClient,
 ) settings.SettingsService {
 	tracer := otel.Tracer("image-gallery/service/settings")
 	meter := otel.Meter("image-gallery/service/settings")
 
 	// Create metrics (ignore errors for graceful degradation)
-	readCounter, err := meter.Int64Counter(
-		"settings.read.total",
-		metric.WithDescription("Total number of settings read operations"),
-		metric.WithUnit("{read}"),
-	)
-	if err != nil {
-		readCounter = nil
-	}
-
-	writeCounter, err := meter.Int64Counter(
-		"settings.write.total",
-		metric.WithDescription("Total number of settings write operations"),
-		metric.WithUnit("{write}"),
-	)
-	if err != nil {
-		writeCounter = nil
-	}
-
-	cacheHitCounter, err := meter.Int64Counter(
-		"settings.cache.hits",
-		metric.WithDescription("Number of settings cache hits"),
-		metric.WithUnit("{hit}"),
-	)
-	if err != nil {
-		cacheHitCounter = nil
-	}
-
-	cacheMissCounter, err := meter.Int64Counter(
-		"settings.cache.misses",
-		metric.WithDescription("Number of settings cache misses"),
-		metric.WithUnit("{miss}"),
-	)
-	if err != nil {
-		cacheMissCounter = nil
-	}
+	settingsOps, _ := meter.Int64Counter(obs.MetricSettingsOps, metric.WithUnit("{operation}"), metric.WithDescription("Settings operations by operation and source"))
+	cacheLookups, _ := meter.Int64Counter(obs.MetricCacheLookups, metric.WithUnit("{lookup}"), metric.WithDescription("Cache lookups by cache and result"))
 
 	return &SettingsServiceImpl{
-		repo:                 repo,
-		cache:                cache,
-		tracer:               tracer,
-		settingsReadCounter:  readCounter,
-		settingsWriteCounter: writeCounter,
-		cacheHitCounter:      cacheHitCounter,
-		cacheMissCounter:     cacheMissCounter,
+		repo:         repo,
+		cache:        redisCache,
+		tracer:       tracer,
+		settingsOps:  settingsOps,
+		cacheLookups: cacheLookups,
 	}
 }
 
@@ -103,7 +69,7 @@ func (s *SettingsServiceImpl) GetSettings(ctx context.Context, req *settings.Get
 
 	// Try cache first
 	if cached := s.tryGetFromCache(ctx, span, req); cached != nil {
-		s.recordReadMetric(ctx, "cache", userIDStr)
+		s.recordReadMetric(ctx, "cache")
 		span.SetStatus(codes.Ok, "")
 		return cached, nil
 	}
@@ -119,7 +85,7 @@ func (s *SettingsServiceImpl) GetSettings(ctx context.Context, req *settings.Get
 	// Cache the result
 	s.cacheSettings(ctx, span, req, result)
 
-	s.recordReadMetric(ctx, "database", userIDStr)
+	s.recordReadMetric(ctx, "database")
 	span.SetAttributes(attribute.Int("settings.id", result.ID))
 	span.SetStatus(codes.Ok, "")
 	return result, nil
@@ -266,7 +232,7 @@ func (s *SettingsServiceImpl) UpdateSettings(ctx context.Context, req *settings.
 		}
 	}
 
-	s.recordWriteMetric(ctx, "update", userIDStr)
+	s.recordWriteMetric(ctx)
 	span.SetAttributes(attribute.Int("settings.id", result.ID))
 	span.SetStatus(codes.Ok, "")
 	return result, nil
@@ -312,7 +278,7 @@ func (s *SettingsServiceImpl) ResetSettings(ctx context.Context, userID *string)
 		}
 	}
 
-	s.recordWriteMetric(ctx, "reset", userIDStr)
+	s.recordWriteMetric(ctx)
 	span.SetAttributes(attribute.Int("settings.id", result.ID))
 	span.SetStatus(codes.Ok, "")
 	return result, nil
@@ -366,36 +332,30 @@ func (s *SettingsServiceImpl) applyUpdates(current *settings.UserSettings, req *
 	return &updated
 }
 
-func (s *SettingsServiceImpl) recordReadMetric(ctx context.Context, source string, userID string) {
-	if s.settingsReadCounter != nil {
-		s.settingsReadCounter.Add(ctx, 1,
-			metric.WithAttributes(
-				attribute.String("source", source),
-				attribute.String("user_id", userID),
-			),
-		)
-	}
+func (s *SettingsServiceImpl) recordReadMetric(ctx context.Context, source string) {
+	s.settingsOps.Add(ctx, 1, metric.WithAttributes(
+		attribute.String(obs.AttrSettingsOp, "read"),
+		attribute.String(obs.AttrSettingsSource, source),
+	))
 }
 
-func (s *SettingsServiceImpl) recordWriteMetric(ctx context.Context, operation string, userID string) {
-	if s.settingsWriteCounter != nil {
-		s.settingsWriteCounter.Add(ctx, 1,
-			metric.WithAttributes(
-				attribute.String("operation", operation),
-				attribute.String("user_id", userID),
-			),
-		)
-	}
+func (s *SettingsServiceImpl) recordWriteMetric(ctx context.Context) {
+	s.settingsOps.Add(ctx, 1, metric.WithAttributes(
+		attribute.String(obs.AttrSettingsOp, "write"),
+		attribute.String(obs.AttrSettingsSource, "database"),
+	))
 }
 
 func (s *SettingsServiceImpl) recordCacheHit(ctx context.Context) {
-	if s.cacheHitCounter != nil {
-		s.cacheHitCounter.Add(ctx, 1)
-	}
+	s.cacheLookups.Add(ctx, 1, metric.WithAttributes(
+		attribute.String(obs.AttrCacheName, "settings"),
+		attribute.String(obs.AttrCacheResult, "hit"),
+	))
 }
 
 func (s *SettingsServiceImpl) recordCacheMiss(ctx context.Context) {
-	if s.cacheMissCounter != nil {
-		s.cacheMissCounter.Add(ctx, 1)
-	}
+	s.cacheLookups.Add(ctx, 1, metric.WithAttributes(
+		attribute.String(obs.AttrCacheName, "settings"),
+		attribute.String(obs.AttrCacheResult, "miss"),
+	))
 }

@@ -20,10 +20,15 @@ type Config struct {
 	Logging       *LoggingConfig
 	Server        *ServerConfig
 	Observability ObservabilityConfig
+	// DemoControlsEnabled (DEMO_CONTROLS_ENABLED, default true) serves the demo
+	// fault-injection endpoints and builds the injector. The app has no
+	// authentication, so this is a switch, not access control.
+	DemoControlsEnabled bool
 }
 
 // StorageConfig holds object storage configuration
 type StorageConfig struct {
+	Provider        string // STORAGE_PROVIDER: "s3" (default) or "gcs"
 	Endpoint        string
 	AccessKeyID     string
 	SecretAccessKey string
@@ -74,6 +79,9 @@ type ServerConfig struct {
 type ObservabilityConfig struct {
 	ServiceName      string
 	ServiceVersion   string
+	Environment      string
+	PodName          string
+	PodNamespace     string
 	TracesEndpoint   string
 	TracesEnabled    bool
 	TracesSampler    string
@@ -110,12 +118,15 @@ func Load() (*Config, error) {
 	cacheIdleTimeout := parseDurationOrDefault(getEnv("CACHE_IDLE_TIMEOUT", "5m"), 5*time.Minute)
 	cacheDefaultTTL := parseDurationOrDefault(getEnv("CACHE_DEFAULT_TTL", "1h"), 1*time.Hour)
 
+	goEnv := getEnv("GO_ENV", "development")
+
 	config := &Config{
-		Environment: getEnv("GO_ENV", "development"),
+		Environment: goEnv,
 		Port:        getEnv("PORT", "8080"),
 		Host:        getEnv("HOST", "localhost"),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
 		Storage: StorageConfig{
+			Provider:        getEnv("STORAGE_PROVIDER", "s3"),
 			Endpoint:        getEnv("STORAGE_ENDPOINT", "localhost:9000"),
 			AccessKeyID:     getEnv("STORAGE_ACCESS_KEY", ""),
 			SecretAccessKey: getEnv("STORAGE_SECRET_KEY", ""),
@@ -157,7 +168,10 @@ func Load() (*Config, error) {
 		},
 		Observability: ObservabilityConfig{
 			ServiceName:      getEnv("OTEL_SERVICE_NAME", "image-gallery"),
-			ServiceVersion:   getEnv("OTEL_SERVICE_VERSION", "1.3.0"),
+			ServiceVersion:   getEnv("OTEL_SERVICE_VERSION", ""), // empty: the built version (app.Bootstrap)
+			Environment:      getEnv("OTEL_DEPLOYMENT_ENVIRONMENT", goEnv),
+			PodName:          getEnv("POD_NAME", ""),
+			PodNamespace:     getEnv("POD_NAMESPACE", ""),
 			TracesEndpoint:   getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "localhost:4318"),
 			TracesEnabled:    parseBoolOrDefault(getEnv("OTEL_TRACES_ENABLED", "true"), true),
 			TracesSampler:    getEnv("OTEL_TRACES_SAMPLER", "always_on"),
@@ -165,6 +179,7 @@ func Load() (*Config, error) {
 			MetricsEndpoint:  getEnv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "localhost:4318"),
 			MetricsEnabled:   parseBoolOrDefault(getEnv("OTEL_METRICS_ENABLED", "true"), true),
 		},
+		DemoControlsEnabled: parseBoolOrDefault(getEnv("DEMO_CONTROLS_ENABLED", "true"), true),
 	}
 
 	// Validate configuration before returning

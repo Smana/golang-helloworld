@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"image-gallery/internal/domain/image"
 	"image-gallery/internal/domain/settings"
@@ -28,6 +27,15 @@ const (
 	statusError    = "error"
 	queryParamTrue = "true"
 	defaultUserID  = "default"
+	// contentTypeJPEGAlt is the nonstandard "image/jpg" variant some clients
+	// send instead of contentTypeJPEG; kept as a constant for the same
+	// goconst reason as contentTypeJPEG/contentTypePNG in handlers.go.
+	contentTypeJPEGAlt = "image/jpg"
+	contentTypeWebP    = "image/webp"
+
+	// JSON keys of the image listing responses
+	jsonKeyImages     = "images"
+	jsonKeyTotalCount = "total_count"
 )
 
 //nolint:gocyclo // Handler with multiple response formats and filter logic
@@ -145,24 +153,26 @@ func (h *Handler) convertDomainImagesToResponse(domainImages []image.Image) []Im
 	for i := range domainImages {
 		img := &domainImages[i]
 		// Use proxy endpoint for reliable access from browser
-		url := fmt.Sprintf("/api/images/%d/view", img.ID)
+		viewURL := fmt.Sprintf("/api/images/%d/view", img.ID)
 
 		// Extract tag names
-		var tagNames []string
+		tagNames := make([]string, 0, len(img.Tags))
 		for _, tag := range img.Tags {
 			tagNames = append(tagNames, tag.Name)
 		}
 
 		images = append(images, ImageResponse{
-			ID:          fmt.Sprintf("%d", img.ID),
-			Name:        img.OriginalFilename,
-			URL:         url,
-			Size:        img.FileSize,
-			UploadTime:  img.UploadedAt.Format("2006-01-02 15:04:05"),
-			ContentType: img.ContentType,
-			Width:       img.Width,
-			Height:      img.Height,
-			Tags:        tagNames,
+			ID:           fmt.Sprintf("%d", img.ID),
+			Name:         img.OriginalFilename,
+			URL:          viewURL,
+			ThumbnailURL: fmt.Sprintf("/api/images/%d/thumbnail", img.ID),
+			Status:       img.Status,
+			Size:         img.FileSize,
+			UploadTime:   img.UploadedAt.Format("2006-01-02 15:04:05"),
+			ContentType:  img.ContentType,
+			Width:        img.Width,
+			Height:       img.Height,
+			Tags:         tagNames,
 		})
 	}
 	return images
@@ -204,11 +214,11 @@ func (h *Handler) filterImageObjects(objects []implementations.ObjectInfo) []Ima
 	images := make([]ImageResponse, 0)
 	for _, obj := range objects {
 		if isImageFile(obj.Key, obj.ContentType) {
-			url := fmt.Sprintf("/api/images/%s/view", obj.Key)
+			viewURL := fmt.Sprintf("/api/images/%s/view", obj.Key)
 			images = append(images, ImageResponse{
 				ID:         obj.Key,
 				Name:       extractOriginalFilename(obj.UserMetadata, obj.Key),
-				URL:        url,
+				URL:        viewURL,
 				Size:       obj.Size,
 				UploadTime: obj.LastModified.Format("2006-01-02 15:04:05"),
 			})
@@ -223,8 +233,8 @@ func (h *Handler) renderFilteredJSONResponse(w http.ResponseWriter, images []Ima
 	w.Header().Set("Content-Type", "application/json")
 
 	response := map[string]interface{}{
-		"total_count": len(images),
-		"images":      images,
+		jsonKeyTotalCount: len(images),
+		jsonKeyImages:     images,
 	}
 
 	// Generate filter panel HTML if filters are active
@@ -279,7 +289,7 @@ func (h *Handler) renderImageCard(img ImageResponse) string {
 					</button>
 				</div>
 			</div>
-			<img src="%s" alt="%s" class="gallery-image cursor-pointer"
+			<img src="%s" alt="%s" loading="lazy" class="gallery-image cursor-pointer"
 				 onclick="openModal('%s', '%s', %d)">
 			<div class="p-3">
 				<h3 class="font-medium text-gray-900 truncate mb-2">%s</h3>
@@ -292,7 +302,7 @@ func (h *Handler) renderImageCard(img ImageResponse) string {
 			</div>
 		</div>`,
 		img.ID, img.ID, img.ID, img.Name,
-		img.URL, img.Name, img.URL, img.Name, img.Size,
+		img.ThumbnailURL, img.Name, img.URL, img.Name, img.Size,
 		img.Name,
 		metadataBadges,
 		formatFileSize(img.Size),
@@ -321,13 +331,13 @@ func (h *Handler) buildContentTypeBadge(img ImageResponse) string {
 // getFormatLabel returns human-readable format label for content type
 func (h *Handler) getFormatLabel(contentType string) string {
 	switch contentType {
-	case "image/jpeg", "image/jpg":
+	case contentTypeJPEG, contentTypeJPEGAlt:
 		return "JPEG"
-	case "image/png":
+	case contentTypePNG:
 		return "PNG"
-	case "image/gif":
+	case contentTypeGIF:
 		return "GIF"
-	case "image/webp":
+	case contentTypeWebP:
 		return "WebP"
 	default:
 		return "Image"
@@ -343,8 +353,8 @@ func (h *Handler) buildTagsBadges(img ImageResponse) string {
 	var badges strings.Builder
 	for _, tag := range img.Tags {
 		colorClass := settings.GetLightTagColorClass(tag)
-		badges.WriteString(fmt.Sprintf(`<button onclick="filterByTag('%s')" class="inline-block %s text-xs px-2 py-1 rounded mr-1 mb-1 cursor-pointer hover:opacity-80 transition-opacity">%s</button>`,
-			tag, colorClass, tag))
+		fmt.Fprintf(&badges, `<button onclick="filterByTag('%s')" class="inline-block %s text-xs px-2 py-1 rounded mr-1 mb-1 cursor-pointer hover:opacity-80 transition-opacity">%s</button>`,
+			tag, colorClass, tag)
 	}
 
 	return fmt.Sprintf(`<div class="mt-2">%s</div>`, badges.String())
@@ -429,8 +439,8 @@ func (h *Handler) renderActiveFilters(tagFilters []string, matchAll bool, result
 func (h *Handler) renderJSONResponse(w http.ResponseWriter, images []ImageResponse, tagFilters []string, matchAll bool) {
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]any{
-		"images":      images,
-		"total_count": len(images),
+		jsonKeyImages:     images,
+		jsonKeyTotalCount: len(images),
 	}
 
 	if len(tagFilters) > 0 {
@@ -440,69 +450,6 @@ func (h *Handler) renderJSONResponse(w http.ResponseWriter, images []ImageRespon
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-	}
-}
-
-func (h *Handler) getImageHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	imagePath := chi.URLParam(r, "id")
-
-	// Create child span for this handler
-	ctx, span := h.startSpan(ctx, "getImageHandler",
-		attribute.String("handler", "get_image"),
-		attribute.String("image.path", imagePath),
-	)
-	defer h.endSpan(span)
-
-	// Check if image exists
-	exists, err := h.storageService.Exists(ctx, imagePath)
-	if err != nil {
-		h.handleError(ctx, span, err, "Error checking image existence", "failed to check existence", imagePath)
-		http.Error(w, "Error checking image", http.StatusInternalServerError)
-		return
-	}
-
-	if !exists {
-		h.setSpanStatus(span, codes.Error, "image not found", attribute.Bool("image.found", false))
-		http.Error(w, "Image not found", http.StatusNotFound)
-		return
-	}
-
-	h.setSpanAttributes(span, attribute.Bool("image.found", true))
-
-	// Generate presigned URL
-	url, err := h.storageService.GenerateURL(ctx, imagePath, 3600)
-	if err != nil {
-		h.handleError(ctx, span, err, "Failed to generate image URL", "failed to generate URL", imagePath)
-		http.Error(w, "Failed to generate image URL", http.StatusInternalServerError)
-		return
-	}
-
-	// Get image metadata
-	fileInfo, err := h.storageService.GetFileInfo(ctx, imagePath)
-	if err != nil {
-		h.handleError(ctx, span, err, "Failed to get image info", "failed to get file info", imagePath)
-		http.Error(w, "Failed to get image info", http.StatusInternalServerError)
-		return
-	}
-
-	h.setSpanAttributes(span,
-		attribute.Int64("image.size", fileInfo.Size),
-		attribute.String("image.content_type", fileInfo.ContentType),
-	)
-	h.addSpanEvent(span, "image_info_retrieved")
-	h.setSpanStatus(span, codes.Ok, "")
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(ImageResponse{
-		ID:         imagePath,
-		URL:        url,
-		Size:       fileInfo.Size,
-		UploadTime: time.Unix(fileInfo.LastModified, 0).Format("2006-01-02 15:04:05"),
-	}); err != nil {
-		h.handleError(ctx, span, err, "Failed to encode response", "", "")
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
 	}
 }
 
@@ -559,24 +506,26 @@ func (h *Handler) handleError(ctx context.Context, span trace.Span, err error, l
 }
 
 type ImageResponse struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name,omitempty"`
-	URL         string   `json:"url"`
-	Size        int64    `json:"size"`
-	UploadTime  string   `json:"upload_time"`
-	ContentType string   `json:"content_type,omitempty"`
-	Width       *int     `json:"width,omitempty"`
-	Height      *int     `json:"height,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name,omitempty"`
+	URL          string   `json:"url"`
+	ThumbnailURL string   `json:"thumbnail_url"`
+	Status       string   `json:"status"`
+	Size         int64    `json:"size"`
+	UploadTime   string   `json:"upload_time"`
+	ContentType  string   `json:"content_type,omitempty"`
+	Width        *int     `json:"width,omitempty"`
+	Height       *int     `json:"height,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 func isImageContentType(contentType string) bool {
 	supportedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"image/webp": true,
+		contentTypeJPEG:    true,
+		contentTypeJPEGAlt: true,
+		contentTypePNG:     true,
+		contentTypeGIF:     true,
+		contentTypeWebP:    true,
 	}
 	return supportedTypes[contentType]
 }
@@ -590,11 +539,11 @@ func isImageFile(filename, contentType string) bool {
 	// If content type is missing or not recognized, check file extension
 	ext := strings.ToLower(filepath.Ext(filename))
 	supportedExtensions := map[string]string{
-		".jpg":  "image/jpeg",
-		".jpeg": "image/jpeg",
-		".png":  "image/png",
-		".gif":  "image/gif",
-		".webp": "image/webp",
+		extJPG:  contentTypeJPEG,
+		extJPEG: contentTypeJPEG,
+		extPNG:  contentTypePNG,
+		extGIF:  contentTypeGIF,
+		extWebP: contentTypeWebP,
 	}
 	_, isSupported := supportedExtensions[ext]
 	return isSupported

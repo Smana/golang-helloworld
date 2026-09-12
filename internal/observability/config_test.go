@@ -167,6 +167,20 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDefaultsToBuiltVersion(t *testing.T) {
+	defer func(v string) { DefaultServiceVersion = v }(DefaultServiceVersion)
+	DefaultServiceVersion = "9.9.9-built"
+
+	t.Setenv("OTEL_SERVICE_VERSION", "")
+	if got := LoadConfig().ServiceVersion; got != "9.9.9-built" {
+		t.Errorf("unset OTEL_SERVICE_VERSION: service version = %q, want the built version %q", got, "9.9.9-built")
+	}
+	t.Setenv("OTEL_SERVICE_VERSION", "1.2.3")
+	if got := LoadConfig().ServiceVersion; got != "1.2.3" {
+		t.Errorf("OTEL_SERVICE_VERSION=1.2.3: service version = %q, want the override", got)
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
 	// Save original env vars
 	originalVars := map[string]string{

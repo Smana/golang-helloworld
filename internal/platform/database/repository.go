@@ -15,6 +15,10 @@ type ImageRepository interface {
 	GetByStoragePath(ctx context.Context, path string) (*Image, error)
 	Update(ctx context.Context, image *Image) error
 	UpdateThumbnail(ctx context.Context, id int, thumbnailPath string) error
+	// UpdateStatus moves an image through pending -> processing -> ready|failed.
+	UpdateStatus(ctx context.Context, id int, status string, processingError *string) error
+	// CompleteProcessing stores the worker's result and marks the image ready.
+	CompleteProcessing(ctx context.Context, id int, p ProcessingResult) error
 	Delete(ctx context.Context, id int) error
 	DeleteByStoragePath(ctx context.Context, path string) error
 
@@ -30,6 +34,7 @@ type ImageRepository interface {
 	Count(ctx context.Context) (int, error)
 	CountByContentType(ctx context.Context, contentType string) (int, error)
 	GetStats(ctx context.Context) (*ImageStats, error)
+	GetContentTypeCounts(ctx context.Context) (map[string]int64, error)
 
 	// Tag relationships
 	GetWithTags(ctx context.Context, pagination PaginationParams, sort SortParams) ([]*Image, error)
@@ -128,6 +133,9 @@ func scanImages(ctx context.Context, rows *sql.Rows) ([]*Image, error) {
 			&image.FileSize,
 			&image.StoragePath,
 			&image.ThumbnailPath,
+			&image.Status,
+			&image.ProcessingError,
+			&image.ProcessedAt,
 			&image.Width,
 			&image.Height,
 			&image.UploadedAt,

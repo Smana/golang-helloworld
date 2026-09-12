@@ -16,12 +16,18 @@ const (
 	SamplerParentBasedTraceIDRatio = "parentbased_traceidratio"
 )
 
+// DefaultServiceVersion is service.version when OTEL_SERVICE_VERSION is unset.
+// cmd/image-gallery sets it to the version the release build links in.
+var DefaultServiceVersion = "dev"
+
 // Config holds configuration for OpenTelemetry instrumentation
 type Config struct {
 	// Service identification
 	ServiceName    string
 	ServiceVersion string
 	Environment    string
+	PodName        string
+	PodNamespace   string
 
 	// OTLP Trace Exporter configuration
 	TracesEndpoint   string
@@ -43,8 +49,10 @@ func LoadConfig() Config {
 	return Config{
 		// Service identification
 		ServiceName:    getEnv("OTEL_SERVICE_NAME", "image-gallery"),
-		ServiceVersion: getEnv("OTEL_SERVICE_VERSION", "1.3.0"),
-		Environment:    getEnv("OTEL_DEPLOYMENT_ENVIRONMENT", "development"),
+		ServiceVersion: getEnv("OTEL_SERVICE_VERSION", DefaultServiceVersion),
+		Environment:    getEnv("OTEL_DEPLOYMENT_ENVIRONMENT", getEnv("GO_ENV", "development")),
+		PodName:        os.Getenv("POD_NAME"),
+		PodNamespace:   os.Getenv("POD_NAMESPACE"),
 
 		// Traces configuration
 		TracesEndpoint:   getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://localhost:4318/v1/traces"),

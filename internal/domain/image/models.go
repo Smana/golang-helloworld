@@ -19,6 +19,9 @@ type Image struct {
 	FileSize         int64           `json:"file_size" db:"file_size"`
 	StoragePath      string          `json:"storage_path" db:"storage_path"`
 	ThumbnailPath    *string         `json:"thumbnail_path" db:"thumbnail_path"`
+	Status           string          `json:"status" db:"status"`
+	ProcessingError  *string         `json:"processing_error,omitempty" db:"processing_error"`
+	ProcessedAt      *time.Time      `json:"processed_at,omitempty" db:"processed_at"`
 	Width            *int            `json:"width" db:"width"`
 	Height           *int            `json:"height" db:"height"`
 	UploadedAt       time.Time       `json:"uploaded_at" db:"uploaded_at"`
@@ -26,6 +29,23 @@ type Image struct {
 	CreatedAt        time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at" db:"updated_at"`
 	Tags             []Tag           `json:"tags,omitempty"`
+}
+
+// Processing status values for Image.Status.
+const (
+	StatusPending    = "pending"
+	StatusProcessing = "processing"
+	StatusReady      = "ready"
+	StatusFailed     = "failed"
+)
+
+// ProcessingResult is the worker's output for one image.
+type ProcessingResult struct {
+	ThumbnailPath string
+	Width, Height int
+	Format        string
+	ColorSpace    string
+	HasAlpha      bool
 }
 
 // Tag represents a tag that can be associated with images
@@ -101,13 +121,21 @@ const (
 	MinImageHeight  = 1
 )
 
+const (
+	contentTypeJPEG    = "image/jpeg"
+	contentTypeJPEGAlt = "image/jpg" // nonstandard variant some clients send
+	contentTypePNG     = "image/png"
+	contentTypeGIF     = "image/gif"
+	contentTypeWebP    = "image/webp"
+)
+
 // Supported content types
 var SupportedContentTypes = map[string]bool{
-	"image/jpeg": true,
-	"image/jpg":  true,
-	"image/png":  true,
-	"image/gif":  true,
-	"image/webp": true,
+	contentTypeJPEG:    true,
+	contentTypeJPEGAlt: true,
+	contentTypePNG:     true,
+	contentTypeGIF:     true,
+	contentTypeWebP:    true,
 }
 
 // Business logic methods for Image
@@ -493,11 +521,11 @@ func NewTag(name string) (*Tag, error) {
 func ValidateContentTypeFromExtension(contentType, filename string) error {
 	ext := strings.ToLower(filepath.Ext(filename))
 	expectedTypes := map[string][]string{
-		".jpg":  {"image/jpeg", "image/jpg"},
-		".jpeg": {"image/jpeg", "image/jpg"},
-		".png":  {"image/png"},
-		".gif":  {"image/gif"},
-		".webp": {"image/webp"},
+		".jpg":  {contentTypeJPEG, contentTypeJPEGAlt},
+		".jpeg": {contentTypeJPEG, contentTypeJPEGAlt},
+		".png":  {contentTypePNG},
+		".gif":  {contentTypeGIF},
+		".webp": {contentTypeWebP},
 	}
 
 	if expectedList, exists := expectedTypes[ext]; exists {

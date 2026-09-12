@@ -1,9 +1,9 @@
-.PHONY: build test clean run dev docker-build docker-up docker-down fmt lint vet test-ci build-ci vulncheck trivy docker-ci ci release
+.PHONY: build test clean run dev docker-build docker-up docker-down fmt lint vet test-ci build-ci vulncheck trivy docker-ci ci release soak
 
 # Build the application
 build:
 	@echo "Building the application..."
-	go build -o ./bin/server ./cmd/server
+	go build -o ./bin/image-gallery ./cmd/image-gallery
 
 # Run tests
 test:
@@ -25,7 +25,7 @@ clean:
 # Run the application locally
 run: build
 	@echo "Running the application..."
-	./bin/server
+	./bin/image-gallery serve
 
 # Run in development mode with hot reload (requires air)
 dev:
@@ -42,17 +42,13 @@ fmt:
 	@echo "Formatting code..."
 	go fmt ./...
 
-# Lint code (using Dagger for consistency with CI)
+# Lint code with the same pinned golangci-lint and merge-base scope as CI.
+# Keep GOLANGCI_LINT_VERSION in step with .github/workflows/ci.yml.
+GOLANGCI_LINT_VERSION := v2.13.2
 lint:
-	@echo "Running linting with Dagger (matches CI environment)..."
-	@if command -v dagger > /dev/null; then \
-		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
-			--src=. \
-			--args=go,run,github.com/golangci/golangci-lint/cmd/golangci-lint@latest,run; \
-	else \
-		echo "Dagger not installed. Run 'make install-tools' first"; \
-		exit 1; \
-	fi
+	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (matches CI)..."
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) \
+		run --new-from-merge-base=origin/main
 
 # Vet code
 vet:
@@ -74,11 +70,19 @@ docker-down:
 	@echo "Stopping services..."
 	docker-compose down
 
+# Local soak (success criterion 5): loadgen mixed at 25 req/s under memory
+# limits, exporting 100% sampling to local VictoriaMetrics + VictoriaTraces.
+# DURATION defaults to 15m; override with DURATION=5m ./scripts/soak.sh for a
+# shorter run.
+soak:
+	@echo "Running local soak..."
+	./scripts/soak.sh
+
 # Install development dependencies
 install-tools:
 	@echo "Installing development tools..."
 	go install github.com/air-verse/air@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "Installing Atlas CLI..."
 	@if ! command -v atlas > /dev/null; then \
 		curl -sSf https://atlasgo.sh | sh -s -- --yes; \
@@ -109,7 +113,7 @@ vulncheck:
 	@if command -v dagger > /dev/null; then \
 		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
 			--src=. \
-			--args=go,run,golang.org/x/vuln/cmd/govulncheck@latest,./...; \
+			--args=go,run,golang.org/x/vuln/cmd/govulncheck@v1.8.0,./...; \
 	else \
 		echo "Dagger not installed. Run 'make install-tools' first"; \
 		exit 1; \
@@ -120,7 +124,7 @@ build-ci:
 	@if command -v dagger > /dev/null; then \
 		dagger call -m github.com/sagikazarmark/daggerverse/go@v0.9.0 exec \
 			--src=. \
-			--args=go,build,-ldflags,"-w -s",-o,./bin/server,./cmd/server; \
+			--args=go,build,-ldflags,"-w -s",-o,./bin/image-gallery,./cmd/image-gallery; \
 	else \
 		echo "Dagger not installed. Run 'make install-tools' first"; \
 		exit 1; \
@@ -135,11 +139,11 @@ docker-ci:
 			with-platform linux/amd64,linux/arm64 \
 			with-cgo-disabled \
 			build \
-			--package=./cmd/server \
+			--package=./cmd/image-gallery \
 			--ldflags="-w -s" \
 			container \
 			--base-image=gcr.io/distroless/static-debian12:nonroot \
-			--binary-name=server \
+			--binary-name=image-gallery \
 			with-exposed-port 8080 \
 			with-label org.opencontainers.image.source=https://github.com/smana/image-gallery \
 			with-label org.opencontainers.image.title=image-gallery; \

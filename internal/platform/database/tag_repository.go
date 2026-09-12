@@ -292,7 +292,8 @@ func (r *tagRepository) GetTagImages(ctx context.Context, tagID int, pagination 
 
 	query := `
 		SELECT i.id, i.filename, i.original_filename, i.content_type, i.file_size,
-			   i.storage_path, i.thumbnail_path, i.width, i.height, i.uploaded_at,
+			   i.storage_path, i.thumbnail_path, i.status, i.processing_error, i.processed_at,
+			   i.width, i.height, i.uploaded_at,
 			   i.metadata, i.created_at, i.updated_at
 		FROM images i
 		INNER JOIN image_tags it ON i.id = it.image_id

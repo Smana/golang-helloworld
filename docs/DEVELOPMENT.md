@@ -4,7 +4,7 @@ This guide provides comprehensive information for developing the Image Gallery a
 
 ## 📋 Prerequisites
 
-- **Go 1.25+** - Latest version required
+- **Go 1.26+** - required by `go.mod` (golang.org/x/crypto pulls the floor up)
 - **Docker & Docker Compose** - For local development environment
 - **Make** - For running development commands
 - **Atlas CLI** - For database schema management (optional)
@@ -68,10 +68,10 @@ atlas migrate apply --env local
 make build
 
 # Run the server
-./bin/server
+./bin/image-gallery serve
 
 # Or run directly with Go
-go run cmd/server/main.go
+go run ./cmd/image-gallery serve
 
 # Or use hot reload for development
 make dev
@@ -109,33 +109,13 @@ docker-compose up -d postgres minio valkey
 go test -v ./internal/services/integrationtests/...
 ```
 
-### Dagger-based Testing (Containerized)
-
-```bash
-# Run complete CI pipeline locally
-make dagger-ci
-
-# Individual steps
-make dagger-lint          # Lint code
-make dagger-test          # Run tests
-make dagger-vulncheck     # Security scan
-make dagger-trivy-fs      # Filesystem security scan
-make dagger-build         # Build binary
-```
-
 ## 📊 Code Quality
 
 ### Linting
 
 ```bash
-# Run linter (requires golangci-lint)
+# Run the pinned golangci-lint, scoped to changes since origin/main (as CI does)
 make lint
-
-# Or use Dagger (no local installation required)
-make dagger-lint
-
-# Auto-fix issues (local only)
-make lint-fix
 ```
 
 ### Code Coverage
@@ -215,9 +195,6 @@ docker-compose logs -f postgres minio valkey
 ```bash
 # Build Docker image locally
 make docker-build
-
-# Or use Dagger for multi-arch builds
-make dagger-docker
 ```
 
 ## 🔧 Available Make Commands
@@ -233,18 +210,6 @@ make lint           # Lint code
 make vet            # Vet code
 make test           # Run unit tests
 make test-coverage  # Run tests with coverage
-```
-
-### Dagger CI/CD (Containerized)
-```bash
-make dagger-lint     # Run linting with Dagger
-make dagger-test     # Run tests with Dagger
-make dagger-vulncheck # Run vulnerability scan with Dagger
-make dagger-trivy-fs # Run filesystem security scan with Trivy
-make dagger-trivy    # Run container image security scan with Trivy
-make dagger-build    # Build application with Dagger
-make dagger-docker   # Build Docker image with Dagger
-make dagger-ci       # Run complete CI pipeline with Dagger
 ```
 
 ### Docker
@@ -427,13 +392,10 @@ GO_ENV=production
 
 ```bash
 # Build optimized binary
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o server cmd/server/main.go
+CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o image-gallery ./cmd/image-gallery
 
 # Or use Docker
 docker build -t image-gallery .
-
-# Or use Dagger for multi-arch builds
-make dagger-docker
 ```
 
 ## 📝 API Documentation
@@ -442,8 +404,6 @@ The application exposes RESTful APIs for image management:
 
 - `GET /api/images` - List images with pagination
 - `POST /api/images` - Upload new image
-- `GET /api/images/:id` - Get specific image
-- `PUT /api/images/:id` - Update image metadata
 - `DELETE /api/images/:id` - Delete image
 
 For detailed API documentation, start the server and visit `/docs` (when implemented).

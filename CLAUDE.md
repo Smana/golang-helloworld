@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Commands
 
 ### Building and Running
-- `make build` - Build the application binary to `./bin/server`
+- `make build` - Build the application binary to `./bin/image-gallery` (`make run` starts it with `serve`; `worker` and `loadgen` are the other two subcommands)
 - `make run` - Build and run the application locally
 - `make dev` - Run with hot reload using air (installs air if needed)
 
@@ -49,7 +49,7 @@ This is a clean architecture Go application with strict separation of concerns:
   - `container.go`: Dependency injection container
 - **Platform** (`internal/platform/`): Infrastructure implementations
   - `database/`: PostgreSQL repositories and migration management
-  - `storage/`: MinIO S3-compatible storage service
+  - `storage/`: object storage service — S3 (MinIO/AWS) or GCS, selected by `STORAGE_PROVIDER`
   - `server/`: HTTP server configuration
 - **Web** (`internal/web/`): HTTP handlers and routing
 
@@ -60,9 +60,9 @@ This is a clean architecture Go application with strict separation of concerns:
 - **Test-Driven Development**: Comprehensive unit and integration tests
 
 ### Technology Stack
-- **Runtime**: Go 1.25
+- **Runtime**: Go 1.26
 - **Database**: PostgreSQL 15 with Atlas schema management
-- **Storage**: MinIO S3-compatible object storage
+- **Storage**: S3 (MinIO/AWS) or GCS object storage, behind one `ObjectStore` interface
 - **Testing**: Testcontainers for isolated integration tests
 - **HTTP**: Chi router for REST API endpoints
 
@@ -132,8 +132,8 @@ The application includes comprehensive observability using OpenTelemetry with su
 
 ##### Development (Local)
 ```bash
-OTEL_SERVICE_NAME=image-gallery
-OTEL_SERVICE_VERSION=1.3.0
+# OTEL_SERVICE_NAME=image-gallery   # leave unset for the per-role default
+# OTEL_SERVICE_VERSION=2.0.0        # leave unset for the version built into the binary
 OTEL_DEPLOYMENT_ENVIRONMENT=development
 OTEL_TRACES_ENABLED=true
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=localhost:4318
@@ -147,8 +147,8 @@ LOG_FORMAT=json
 
 ##### Kubernetes with VictoriaMetrics Operator
 ```bash
-OTEL_SERVICE_NAME=image-gallery
-OTEL_SERVICE_VERSION=1.3.0
+# OTEL_SERVICE_NAME=image-gallery   # leave unset for the per-role default
+# OTEL_SERVICE_VERSION=2.0.0        # leave unset for the version built into the binary
 OTEL_DEPLOYMENT_ENVIRONMENT=production
 OTEL_TRACES_ENABLED=true
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=victoriametrics-victoria-logs-single-server:4318
@@ -170,16 +170,16 @@ LOG_FORMAT=json
 
 **Service Layer** (`internal/services/implementations/`)
 - ImageService: Traces for create, get, list operations with business metrics
-- Metrics: `image.uploads.total`, `image.processing.duration`, `image.cache.hits/misses`
+- Metrics: `image.uploads`, `image.processing.duration`, `cache.lookups` (`cache.result`: `hit`/`miss`)
 - StorageService: Traces and metrics for all storage operations
-- Metrics: `storage.operations.total`, `storage.operation.duration`, `storage.bytes.transferred`
+- Metrics: `storage.operations`, `storage.operation.duration`, `storage.transferred`
 
 **Infrastructure Layer**
 - Database query tracing with automatic PostgreSQL instrumentation via `otelsql`
   - Automatic span creation for all SQL queries (SELECT, INSERT, UPDATE, DELETE)
-  - Semantic conventions: `db.system`, `db.statement`, `db.operation`
-  - Connection pool metrics: `db.client.connections.usage`, `db.client.connections.max`
-- Storage operation tracing (MinIO/S3)
+  - Semantic conventions: `db.system.name`, `db.query.text`, `db.operation.name` (semconv v1.43.0)
+  - Connection pool metrics: `db.sql.connection.open`, `db.sql.connection.max_open` (`otelsql`)
+- Storage operation tracing (S3/MinIO or GCS)
 - Cache operation tracing (Valkey/Redis)
 
 **Logging**
@@ -191,26 +191,25 @@ LOG_FORMAT=json
 #### Key Metrics
 
 **HTTP Metrics:**
-- `http.server.request.count` - Total HTTP requests
-- `http.server.request.duration` - Request latency histogram
-- `http.server.response.size` - Response size histogram
+- `http.server.request.duration` - Request latency histogram (its `_count` is the request count; there is no separate count instrument)
+- `http.server.response.body.size` - Response size histogram
 - `http.server.active_requests` - Active request gauge
 
 **Business Metrics:**
-- `image.uploads.total` - Total image uploads by content type
+- `image.uploads` - Total image uploads by content type and outcome
 - `image.processing.duration` - Image processing time
-- `image.cache.hits` / `image.cache.misses` - Cache hit rate
+- `cache.lookups` (`cache.result`: `hit`/`miss`) - Cache hit rate
 
 **Infrastructure Metrics:**
-- `storage.operations.total` - Storage operations by type
+- `storage.operations` - Storage operations by type
 - `storage.operation.duration` - Storage operation latency
-- `storage.bytes.transferred` - Data transfer volume
+- `storage.transferred` - Data transfer volume
 
-**Database Metrics (Connection Pool):**
-- `db.client.connections.usage` - Current number of connections in use
-- `db.client.connections.idle` - Number of idle connections
-- `db.client.connections.max` - Maximum allowed connections
-- `db.client.connections.wait_time` - Time waiting for a connection
+**Database Metrics (Connection Pool, from `otelsql`):**
+- `db.sql.connection.max_open` - Maximum number of open connections to the database
+- `db.sql.connection.open` - Established connections, both in use and idle
+- `db.sql.connection.wait` - Total number of connections waited for
+- `db.sql.connection.wait_duration` - Total time blocked waiting for a new connection
 
 #### Exemplars: Connecting Metrics to Traces
 
@@ -229,7 +228,7 @@ The application uses **OpenTelemetry Exemplars** to create powerful correlations
 
 **Example Use Cases:**
 - **Slow Request Investigation**: See a spike in `http.server.request.duration`? Click the exemplar to view the exact slow trace
-- **Failed Upload Debugging**: High error rate in `image.uploads.total`? Jump to failing traces instantly
+- **Failed Upload Debugging**: High error rate in `image.uploads`? Jump to failing traces instantly
 - **Storage Performance**: Identify specific slow S3 operations via `storage.operation.duration` exemplars
 
 **Histogram Type: Exponential Histograms**
@@ -266,29 +265,29 @@ This ensures:
 
 **VictoriaMetrics (PromQL):**
 ```promql
-# HTTP request rate by endpoint
-rate(http_server_request_count[5m])
+# HTTP request rate by route
+sum(rate(http_server_request_duration_count[5m])) by (http_route)
 
-# Image upload rate by content type
-rate(image_uploads_total{status="success"}[5m])
+# Image upload rate by outcome
+rate(image_uploads_total{outcome="success"}[5m])
 
 # Storage operation latency p95
 histogram_quantile(0.95, rate(storage_operation_duration_bucket[5m]))
 
 # Cache hit rate
-rate(image_cache_hits[5m]) / (rate(image_cache_hits[5m]) + rate(image_cache_misses[5m]))
+sum(rate(cache_lookups_total{cache_result="hit"}[5m])) / sum(rate(cache_lookups_total[5m]))
 ```
 
 **VictoriaTraces (Trace Queries):**
 ```
 # Find slow image uploads
-service.name="image-gallery" AND name="CreateImage" AND duration > 1s
+service.name="xplane-image-gallery" AND name="CreateImage" AND duration > 1s
 
 # Find failed storage operations
-service.name="image-gallery" AND name="Store" AND status.code="ERROR"
+service.name="xplane-image-gallery" AND name="storage.put" AND status.code="ERROR"
 
 # Trace image retrieval with cache
-service.name="image-gallery" AND name="GetImage"
+service.name="xplane-image-gallery" AND name="GetImage"
 ```
 
 #### Observability Best Practices
@@ -316,9 +315,7 @@ For local testing without VictoriaMetrics/VictoriaTraces, you can:
 ### API Endpoints
 - `GET /api/images` - List images with pagination
 - `POST /api/images` - Upload new image
-- `GET /api/images/:id` - Get specific image
 - `GET /api/images/:id/view` - View image (proxy endpoint)
-- `PUT /api/images/:id` - Update image metadata
 - `DELETE /api/images/:id` - Delete image
 
 ### Testing Strategy

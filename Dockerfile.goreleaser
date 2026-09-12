@@ -5,7 +5,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # Note: These are already included in the distroless image
 
 # Copy the binary (GoReleaser will handle this automatically)
-COPY server /app/server
+COPY image-gallery /app/image-gallery
 
 WORKDIR /app
 
@@ -19,5 +19,6 @@ USER nonroot:nonroot
 # HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 #     CMD curl -f http://localhost:8080/health || exit 1
 
-# Command to run the executable
-ENTRYPOINT ["/app/server"]
+# ENTRYPOINT + CMD: a Kubernetes `args` (the worker sidecar's ["worker"]) replaces CMD only.
+ENTRYPOINT ["/app/image-gallery"]
+CMD ["serve"]

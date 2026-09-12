@@ -4,75 +4,51 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 const (
-	instrumentationName = "github.com/smana/image-gallery/http"
+	instrumentationName = "image-gallery/http"
 	healthzPath         = "/healthz"
 	readyzPath          = "/readyz"
+	unmatchedRoute      = "unmatched"
 )
 
-// HTTPMetrics holds HTTP-related metrics instruments
+// HTTPMetrics holds the semconv HTTP server instruments.
 type HTTPMetrics struct {
-	requestCount    metric.Int64Counter
-	requestDuration metric.Float64Histogram
-	responseSize    metric.Int64Histogram
-	activeRequests  metric.Int64UpDownCounter
+	duration metric.Float64Histogram
+	active   metric.Int64UpDownCounter
+	respSize metric.Int64Histogram
 }
 
-// NewHTTPMetrics creates and registers HTTP metrics
+// NewHTTPMetrics registers the HTTP server instruments on meter.
 func NewHTTPMetrics(meter metric.Meter) (*HTTPMetrics, error) {
-	requestCount, err := meter.Int64Counter(
-		"http.server.request.count",
-		metric.WithDescription("Total number of HTTP requests"),
-		metric.WithUnit("{request}"),
-	)
+	duration, err := meter.Float64Histogram(MetricHTTPServerDuration,
+		metric.WithDescription("Duration of HTTP server requests"), metric.WithUnit("s"))
 	if err != nil {
 		return nil, err
 	}
-
-	requestDuration, err := meter.Float64Histogram(
-		"http.server.request.duration",
-		metric.WithDescription("Duration of HTTP requests"),
-		metric.WithUnit("s"),
-	)
+	active, err := meter.Int64UpDownCounter(MetricHTTPServerActive,
+		metric.WithDescription("Number of in-flight HTTP server requests"), metric.WithUnit("{request}"))
 	if err != nil {
 		return nil, err
 	}
-
-	responseSize, err := meter.Int64Histogram(
-		"http.server.response.size",
-		metric.WithDescription("Size of HTTP response bodies"),
-		metric.WithUnit("By"),
-	)
+	respSize, err := meter.Int64Histogram(MetricHTTPServerRespSize,
+		metric.WithDescription("Size of HTTP server response bodies"), metric.WithUnit("By"))
 	if err != nil {
 		return nil, err
 	}
-
-	activeRequests, err := meter.Int64UpDownCounter(
-		"http.server.active_requests",
-		metric.WithDescription("Number of active HTTP requests"),
-		metric.WithUnit("{request}"),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return &HTTPMetrics{
-		requestCount:    requestCount,
-		requestDuration: requestDuration,
-		responseSize:    responseSize,
-		activeRequests:  activeRequests,
-	}, nil
+	return &HTTPMetrics{duration: duration, active: active, respSize: respSize}, nil
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code and response size
+// responseWriter captures the status code and body size.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode   int
@@ -90,105 +66,67 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// MetricsMiddleware returns a middleware that records HTTP metrics
-func MetricsMiddleware(metrics *HTTPMetrics) func(http.Handler) http.Handler {
+// Middleware is the only HTTP server instrumentation. It continues the caller's
+// trace (W3C traceparent), names the span after the chi route pattern once
+// routing is done, and records RED metrics keyed by that pattern. It never keys
+// by the raw path: per-image IDs made every URL its own span name and series.
+// metrics may be nil (metrics disabled).
+func Middleware(tracer trace.Tracer, metrics *HTTPMetrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip health check endpoints
 			if r.URL.Path == healthzPath || r.URL.Path == readyzPath {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			start := time.Now()
-			ctx := r.Context()
-
-			// Increment active requests
-			metrics.activeRequests.Add(ctx, 1)
-			defer metrics.activeRequests.Add(ctx, -1)
-
-			// Wrap response writer to capture status code and size
-			rw := &responseWriter{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
-			}
-
-			// Process request
-			next.ServeHTTP(rw, r)
-
-			// Calculate duration
-			duration := time.Since(start).Seconds()
-
-			// Common attributes
-			attrs := []attribute.KeyValue{
-				semconv.HTTPRequestMethodKey.String(r.Method),
-				semconv.HTTPRoute(r.URL.Path),
-				semconv.HTTPResponseStatusCode(rw.statusCode),
-				attribute.String("http.scheme", r.URL.Scheme),
-			}
-
-			// Record metrics
-			metrics.requestCount.Add(ctx, 1, metric.WithAttributes(attrs...))
-			metrics.requestDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-			metrics.responseSize.Record(ctx, rw.bytesWritten, metric.WithAttributes(attrs...))
-		})
-	}
-}
-
-// TracingMiddleware returns a middleware that creates spans for HTTP requests
-func TracingMiddleware(tracer trace.Tracer) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip health check endpoints
-			if r.URL.Path == healthzPath || r.URL.Path == readyzPath {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Start span
-			ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path,
+			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+			method := semconv.HTTPRequestMethodKey.String(r.Method)
+			ctx, span := tracer.Start(ctx, r.Method,
 				trace.WithSpanKind(trace.SpanKindServer),
-				trace.WithAttributes(
-					semconv.HTTPRequestMethodKey.String(r.Method),
-					semconv.HTTPRoute(r.URL.Path),
-					attribute.String("http.scheme", r.URL.Scheme),
-					semconv.URLFull(r.URL.String()),
+				trace.WithAttributes(method,
+					semconv.URLPath(r.URL.Path),
 					semconv.UserAgentOriginal(r.UserAgent()),
-					semconv.HTTPRequestBodySize(int(r.ContentLength)),
-					semconv.ClientAddress(r.RemoteAddr),
-				),
+					semconv.ClientAddress(r.RemoteAddr)),
 			)
 			defer span.End()
-
-			// Wrap response writer to capture status code
-			rw := &responseWriter{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
+			if metrics != nil {
+				metrics.active.Add(ctx, 1, metric.WithAttributes(method))
+				defer metrics.active.Add(ctx, -1, metric.WithAttributes(method))
 			}
 
-			// Process request with trace context
+			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			start := time.Now()
 			next.ServeHTTP(rw, r.WithContext(ctx))
 
-			// Add response attributes to span
-			span.SetAttributes(
-				semconv.HTTPResponseStatusCode(rw.statusCode),
-				attribute.Int64("http.response.body.size", rw.bytesWritten),
-			)
-
-			// Set span status based on HTTP status code
-			if rw.statusCode >= 400 {
+			route := routePattern(r)
+			attrs := []attribute.KeyValue{method, semconv.HTTPRoute(route), semconv.HTTPResponseStatusCode(rw.statusCode)}
+			span.SetName(r.Method + " " + route)
+			span.SetAttributes(semconv.HTTPRoute(route), semconv.HTTPResponseStatusCode(rw.statusCode),
+				semconv.HTTPResponseBodySize(int(rw.bytesWritten)))
+			if rw.statusCode >= http.StatusInternalServerError {
 				span.SetStatus(codes.Error, http.StatusText(rw.statusCode))
+			}
+			if metrics != nil {
+				metrics.duration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+				metrics.respSize.Record(ctx, rw.bytesWritten, metric.WithAttributes(attrs...))
 			}
 		})
 	}
 }
 
-// GetTracer returns a tracer for HTTP instrumentation
-func GetTracer() trace.Tracer {
-	return otel.Tracer(instrumentationName)
+// routePattern is the matched chi pattern (complete once routing returned), or
+// "unmatched" so that 404s cannot mint one series per path. The route context
+// is shared by pointer with the request chi routed, so it is filled here.
+func routePattern(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if p := rc.RoutePattern(); p != "" {
+			return p
+		}
+	}
+	return unmatchedRoute
 }
 
-// GetMeter returns a meter for HTTP metrics
-func GetMeter() metric.Meter {
-	return otel.Meter(instrumentationName)
-}
+// GetTracer returns the HTTP instrumentation tracer.
+func GetTracer() trace.Tracer { return otel.Tracer(instrumentationName) }
+
+// GetMeter returns the HTTP instrumentation meter.
+func GetMeter() metric.Meter { return otel.Meter(instrumentationName) }

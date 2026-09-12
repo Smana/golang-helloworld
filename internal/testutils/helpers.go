@@ -61,7 +61,7 @@ func (ts *TestSuite) CreateTestImage(ctx context.Context, filename string) (*dat
 	img := &database.Image{
 		Filename:         fmt.Sprintf("test_%s_%d.jpg", filename, secureRandInt()),
 		OriginalFilename: filename + ".jpg",
-		ContentType:      "image/jpeg",
+		ContentType:      contentTypeJPEG,
 		FileSize:         1024 * (1 + secureRandInt63n(99)), // Random size 1KB to 100KB
 		StoragePath:      fmt.Sprintf("images/test_%d.jpg", time.Now().UnixNano()),
 		Width:            intPtr(800 + secureRandIntn(400)),
@@ -131,12 +131,28 @@ func (ts *TestSuite) CreateTestImageWithTags(ctx context.Context, filename strin
 	return img, tags, nil
 }
 
-// GenerateTestImageData creates mock image data for testing
-func GenerateTestImageData(width, height int) []byte {
-	// Create a simple test image (just some bytes that represent an image)
-	// In a real test, you might want to generate actual image data
+const contentTypeJPEG = "image/jpeg"
+
+// imageMagicNumbers are the header bytes storage.Service's content-type
+// sniffing checks for; keep in step with the patterns it validates against.
+var imageMagicNumbers = map[string][]byte{
+	contentTypeJPEG: {0xFF, 0xD8, 0xFF},
+	"image/jpg":     {0xFF, 0xD8, 0xFF},
+	"image/png":     {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
+	"image/gif":     {0x47, 0x49, 0x46, 0x38, 0x39, 0x61},
+}
+
+// GenerateTestImageData creates mock image data for testing. The leading
+// bytes are overwritten with contentType's magic number, so the real
+// storage.Service upload path (which sniffs content against the declared
+// type) accepts it; the remaining bytes stay random.
+func GenerateTestImageData(width, height int, contentType string) []byte {
 	size := width * height * 3 // RGB
-	return secureRandBytes(size)
+	data := secureRandBytes(size)
+	if magic := imageMagicNumbers[contentType]; len(magic) > 0 && len(data) >= len(magic) {
+		copy(data, magic)
+	}
+	return data
 }
 
 // CreateMultipartFormData creates multipart form data for file upload testing
@@ -308,8 +324,11 @@ func secureRandInt63n(n int64) int64 {
 		// Fallback to timestamp-based value for tests
 		return time.Now().UnixNano() % n
 	}
+	// Reduce modulo n in unsigned space before converting to int64: converting
+	// a random uint64 to int64 first can produce a negative value, and Go's `%`
+	// preserves the dividend's sign, so the result would fall outside [0, n).
 	// #nosec G115 -- Test utility function, overflow acceptable for test randomness
-	return int64(binary.BigEndian.Uint64(buf[:])) % n
+	return int64(binary.BigEndian.Uint64(buf[:]) % uint64(n))
 }
 
 // secureRandIntn generates a secure random int in range [0, n)

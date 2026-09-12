@@ -19,6 +19,12 @@ type Repository interface {
 	// Update modifies an existing image
 	Update(ctx context.Context, image *Image) error
 
+	// UpdateStatus sets the processing status (and error text when failed).
+	UpdateStatus(ctx context.Context, id int, status string, processingError *string) error
+
+	// CompleteProcessing stores the worker's result and marks the image ready.
+	CompleteProcessing(ctx context.Context, id int, res ProcessingResult) error
+
 	// Delete removes an image from the repository
 	Delete(ctx context.Context, id int) error
 
@@ -30,6 +36,9 @@ type Repository interface {
 
 	// CountByTag returns the number of images with a specific tag
 	CountByTag(ctx context.Context, tagName string) (int, error)
+
+	// GetStats returns aggregate statistics about all images
+	GetStats(ctx context.Context) (*ImageStats, error)
 }
 
 // TagRepository defines the interface for tag data persistence
@@ -77,8 +86,8 @@ type StorageService interface {
 	// Exists checks if a file exists in storage
 	Exists(ctx context.Context, path string) (bool, error)
 
-	// GenerateURL creates a temporary or permanent URL for file access
-	GenerateURL(ctx context.Context, path string, expiry int64) (string, error)
+	// StoreAt saves data under an exact path (used for derived objects such as thumbnails).
+	StoreAt(ctx context.Context, path string, contentType string, data io.Reader, size int64) error
 
 	// GetFileInfo returns metadata about a stored file
 	GetFileInfo(ctx context.Context, path string) (*FileInfo, error)
@@ -121,6 +130,11 @@ type ImageInfo struct {
 	Orientation int
 }
 
+// JobPublisher hands an uploaded image to the asynchronous worker.
+type JobPublisher interface {
+	PublishProcessImage(ctx context.Context, imageID int, objectKey string) error
+}
+
 // EventPublisher defines the interface for publishing domain events
 type EventPublisher interface {
 	// PublishImageCreated publishes an event when an image is created
@@ -155,9 +169,6 @@ type ImageService interface {
 
 	// DownloadImage provides access to the original image file
 	DownloadImage(ctx context.Context, id int) (io.ReadCloser, string, error)
-
-	// GenerateImageURL creates a URL for accessing an image
-	GenerateImageURL(ctx context.Context, id int, expiry int64) (string, error)
 
 	// GetImageStats returns statistics about images
 	GetImageStats(ctx context.Context) (*ImageStats, error)

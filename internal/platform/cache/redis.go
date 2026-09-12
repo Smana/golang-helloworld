@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
 	"image-gallery/internal/config"
@@ -26,33 +27,38 @@ func NewRedisClient(cfg config.CacheConfig) (*RedisClient, error) {
 		return nil, fmt.Errorf("cache is disabled")
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:            cfg.Address,
-		Password:        cfg.Password,
-		DB:              cfg.Database,
-		MaxRetries:      cfg.MaxRetries,
-		MinRetryBackoff: cfg.MinRetryBackoff,
-		MaxRetryBackoff: cfg.MaxRetryBackoff,
-		DialTimeout:     cfg.DialTimeout,
-		ReadTimeout:     cfg.ReadTimeout,
-		WriteTimeout:    cfg.WriteTimeout,
-		PoolSize:        cfg.PoolSize,
-		MinIdleConns:    cfg.MinIdleConns,
-		PoolTimeout:     cfg.PoolTimeout,
-	})
-
-	// Test the connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis/Valkey: %w", err)
+	rdb, err := NewInstrumentedClient(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	return &RedisClient{
 		client:     rdb,
 		defaultTTL: cfg.DefaultTTL,
 	}, nil
+}
+
+// NewInstrumentedClient returns a Valkey client with redisotel tracing and
+// metrics (db.client.* spans and connection-pool metrics), after a ping.
+func NewInstrumentedClient(cfg config.CacheConfig) (*redis.Client, error) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: cfg.Address, Password: cfg.Password, DB: cfg.Database,
+		MaxRetries: cfg.MaxRetries, MinRetryBackoff: cfg.MinRetryBackoff, MaxRetryBackoff: cfg.MaxRetryBackoff,
+		DialTimeout: cfg.DialTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
+		PoolSize: cfg.PoolSize, MinIdleConns: cfg.MinIdleConns, PoolTimeout: cfg.PoolTimeout,
+	})
+	if err := redisotel.InstrumentTracing(rdb); err != nil {
+		return nil, fmt.Errorf("redisotel tracing: %w", err)
+	}
+	if err := redisotel.InstrumentMetrics(rdb); err != nil {
+		return nil, fmt.Errorf("redisotel metrics: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis/Valkey: %w", err)
+	}
+	return rdb, nil
 }
 
 // getCachedValue is a helper method to get and unmarshal cached values

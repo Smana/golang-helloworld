@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -61,7 +60,7 @@ func (h *Handler) uploadImagesHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Start tracing span
-	ctx, span := h.tracer.Start(ctx, "UploadImages", trace.WithSpanKind(trace.SpanKindServer))
+	ctx, span := h.tracer.Start(ctx, "UploadImages")
 	defer span.End()
 
 	// Log upload initiation
@@ -70,13 +69,14 @@ func (h *Handler) uploadImagesHandler(w http.ResponseWriter, r *http.Request) {
 		Str("content_type", r.Header.Get("Content-Type")).
 		Msg("Starting image upload request")
 
-	// Limit request body size
+	// Limit request body size: parsing stops at maxUploadSize, whatever the client sends
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
 	// Parse multipart form with limited in-memory buffer
 	// maxMemoryPerUpload (1MB) is buffered in RAM per request
 	// Files larger than 1MB are written to temporary files in /tmp
 	// This prevents OOMKills under high concurrency (10 concurrent uploads = 10MB not 100MB)
+	//nolint:gosec // G120: bounded by the MaxBytesReader above, which gosec's taint analysis cannot see
 	if err := r.ParseMultipartForm(maxMemoryPerUpload); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to parse multipart form")
@@ -280,17 +280,11 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 		}
 	}
 
-	// Extract image dimensions (currently a stub - TODO: implement without buffering entire file)
-	// For now, pass nil to extractImageDimensions to indicate streaming mode
-	width, height := h.extractImageDimensions(ctx, nil, fileHeader.Filename, fileSpan)
-
-	// Create upload request
+	// Dimensions are extracted by the worker once it processes the image.
 	createReq := &image.CreateImageRequest{
 		OriginalFilename: fileHeader.Filename,
 		ContentType:      contentType,
 		FileSize:         fileHeader.Size,
-		Width:            width,
-		Height:           height,
 		Tags:             tags,
 	}
 
@@ -310,16 +304,8 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 		}
 	}
 
-	// Generate presigned URL for immediate access
-	var imageURL string
-	if h.storageService != nil {
-		url, err := h.storageService.GenerateURL(ctx, img.StoragePath, 3600) // 1 hour expiry
-		if err != nil {
-			h.logger.Warn(ctx).Err(err).Int("image_id", img.ID).Msg("Failed to generate image URL")
-		} else {
-			imageURL = url
-		}
-	}
+	// Serve the image through the app's own proxy endpoint (no presigned URLs).
+	imageURL := fmt.Sprintf("/api/images/%d/view", img.ID)
 
 	// Extract tag names
 	tagNames := make([]string, 0, len(img.Tags))
@@ -351,36 +337,6 @@ func (h *Handler) processUploadedFile(ctx context.Context, fileHeader *multipart
 	}
 }
 
-// extractImageDimensions extracts width and height from image data
-func (h *Handler) extractImageDimensions(ctx context.Context, fileData []byte, filename string, span trace.Span) (width *int, height *int) {
-	if h.container == nil || fileData == nil {
-		// Return nil dimensions if processor unavailable or streaming mode (fileData == nil)
-		return nil, nil
-	}
-
-	imageInfo, err := h.container.ImageProcessor().GetImageInfo(ctx, bytes.NewReader(fileData))
-	if err != nil {
-		// Log but don't fail - dimensions are optional
-		h.logger.Warn(ctx).Err(err).Str("filename", filename).Msg("Failed to extract image dimensions")
-		return nil, nil
-	}
-
-	span.SetAttributes(
-		attribute.Int("image.width", imageInfo.Width),
-		attribute.Int("image.height", imageInfo.Height),
-		attribute.String("image.format", imageInfo.Format),
-	)
-
-	h.logger.Debug(ctx).
-		Str("filename", filename).
-		Int("width", imageInfo.Width).
-		Int("height", imageInfo.Height).
-		Str("format", imageInfo.Format).
-		Msg("Extracted image dimensions")
-
-	return &imageInfo.Width, &imageInfo.Height
-}
-
 // parseTags parses comma-separated tags and returns cleaned, deduplicated tag names
 func parseTags(tagsStr string) []string {
 	if tagsStr == "" {
@@ -409,11 +365,11 @@ func parseTags(tagsStr string) []string {
 // isSupportedImageType checks if the content type is a supported image format
 func isSupportedImageType(contentType string) bool {
 	supportedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"image/webp": true,
+		contentTypeJPEG:    true,
+		contentTypeJPEGAlt: true,
+		contentTypePNG:     true,
+		contentTypeGIF:     true,
+		contentTypeWebP:    true,
 	}
 	return supportedTypes[contentType]
 }

@@ -1,5 +1,5 @@
 # Multi-stage build for optimized production image
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install git for go mod download
 RUN apk add --no-cache git ca-certificates
@@ -20,10 +20,10 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-w -s" \
     -a -installsuffix cgo \
-    -o server ./cmd/server
+    -o image-gallery ./cmd/image-gallery
 
 # Verify the binary was created
-RUN ls -la /app/server
+RUN ls -la /app/image-gallery
 
 # Start a new stage from scratch
 FROM alpine:3.19
@@ -38,13 +38,13 @@ RUN addgroup -g 1001 appgroup && \
     adduser -D -u 1001 -G appgroup appuser
 
 # Copy the binary from the builder stage
-COPY --from=builder /app/server /app/server
+COPY --from=builder /app/image-gallery /app/image-gallery
 
 # Copy web assets if they exist (optional)
 RUN mkdir -p /app/web
 
 # Verify binary was copied and make it executable
-RUN ls -la /app/ && chmod +x /app/server
+RUN ls -la /app/ && chmod +x /app/image-gallery
 
 # Change ownership to non-root user
 RUN chown -R appuser:appgroup /app
@@ -59,7 +59,8 @@ EXPOSE 8080
 # HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 #     CMD curl -f http://localhost:8080/health || exit 1
 
-# Command to run the executable
-CMD ["/app/server"]
+# ENTRYPOINT + CMD: a Kubernetes `args` (the worker sidecar's ["worker"]) replaces CMD only.
+ENTRYPOINT ["/app/image-gallery"]
+CMD ["serve"]
 
 

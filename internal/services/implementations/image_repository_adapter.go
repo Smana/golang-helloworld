@@ -9,10 +9,23 @@ import (
 	"image-gallery/internal/platform/database"
 )
 
+// CacheInvalidator drops cached views of an image. The worker writes image
+// status directly through this adapter (UpdateStatus, CompleteProcessing),
+// bypassing ImageService's own cache invalidation on Create/Update/Delete;
+// without this, a list cached while an upload was still processing stays
+// stale until its 30-minute TTL, and a single image fetched (GetImage) while
+// still processing stays stale until its 1-hour TTL. A nil invalidator
+// disables both (e.g. caching turned off).
+type CacheInvalidator interface {
+	InvalidateImageLists(ctx context.Context) error
+	DeleteImage(ctx context.Context, id int) error
+}
+
 // ImageRepositoryAdapter adapts database ImageRepository to domain Repository interface
 type ImageRepositoryAdapter struct {
 	dbRepo  database.ImageRepository
 	tagRepo database.TagRepository
+	cache   CacheInvalidator
 }
 
 // NewImageRepositoryAdapter creates a domain repository adapter
@@ -28,6 +41,23 @@ func (a *ImageRepositoryAdapter) SetTagRepository(tagRepo database.TagRepository
 	a.tagRepo = tagRepo
 }
 
+// SetCacheInvalidator wires list-cache and single-image cache invalidation
+// for the worker's direct status writes; see CacheInvalidator.
+func (a *ImageRepositoryAdapter) SetCacheInvalidator(cache CacheInvalidator) {
+	a.cache = cache
+}
+
+// invalidateCaches best-effort drops both the list cache and the single-image
+// cache entry for id: a failure here must not fail the status write it
+// follows, so any error is discarded.
+func (a *ImageRepositoryAdapter) invalidateCaches(ctx context.Context, id int) {
+	if a.cache == nil {
+		return
+	}
+	_ = a.cache.InvalidateImageLists(ctx) //nolint:errcheck // best-effort; a stale cached list expires within its TTL anyway
+	_ = a.cache.DeleteImage(ctx, id)      //nolint:errcheck // best-effort; a stale cached image expires within its TTL anyway
+}
+
 func (a *ImageRepositoryAdapter) Create(ctx context.Context, img *image.Image) error {
 	dbImage := &database.Image{
 		Filename:         img.Filename,
@@ -36,6 +66,9 @@ func (a *ImageRepositoryAdapter) Create(ctx context.Context, img *image.Image) e
 		FileSize:         img.FileSize,
 		StoragePath:      img.StoragePath,
 		ThumbnailPath:    img.ThumbnailPath,
+		Status:           img.Status,
+		ProcessingError:  img.ProcessingError,
+		ProcessedAt:      img.ProcessedAt,
 		Width:            img.Width,
 		Height:           img.Height,
 		UploadedAt:       img.UploadedAt,
@@ -80,11 +113,17 @@ func (a *ImageRepositoryAdapter) GetByID(ctx context.Context, id int) (*image.Im
 		return nil, err
 	}
 
-	// Load tags for this image
-	// Note: We need access to tag repository, but adapter only has image repo
-	// For now, we'll load tags if the database image repository supports it
-	// TODO: This is a design issue - the adapter should have access to both repos
-	// or we should use a different approach
+	// Load tags for this image, if a tag repository has been wired in
+	if a.tagRepo != nil {
+		tags, err := a.tagRepo.GetImageTags(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tags for image %d: %w", id, err)
+		}
+		dbImage.Tags = make([]database.Tag, len(tags))
+		for i, tag := range tags {
+			dbImage.Tags[i] = *tag
+		}
+	}
 
 	return a.convertToBaseImage(dbImage), nil
 }
@@ -184,9 +223,15 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 		FileSize:         img.FileSize,
 		StoragePath:      img.StoragePath,
 		ThumbnailPath:    img.ThumbnailPath,
-		Width:            img.Width,
-		Height:           img.Height,
-		Metadata:         database.Metadata{},
+		// Status/ProcessingError/ProcessedAt are mapped for symmetry with the other conversion
+		// sites, but dbRepo.Update's SET clause does not persist them by design: this is the
+		// generic metadata path, and the dedicated writers are UpdateStatus/CompleteProcessing.
+		Status:          img.Status,
+		ProcessingError: img.ProcessingError,
+		ProcessedAt:     img.ProcessedAt,
+		Width:           img.Width,
+		Height:          img.Height,
+		Metadata:        database.Metadata{},
 	}
 
 	// Convert domain metadata to database metadata if present
@@ -201,6 +246,25 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 	}
 
 	img.UpdatedAt = dbImage.UpdatedAt
+	return nil
+}
+
+func (a *ImageRepositoryAdapter) UpdateStatus(ctx context.Context, id int, status string, processingError *string) error {
+	if err := a.dbRepo.UpdateStatus(ctx, id, status, processingError); err != nil {
+		return err
+	}
+	a.invalidateCaches(ctx, id)
+	return nil
+}
+
+func (a *ImageRepositoryAdapter) CompleteProcessing(ctx context.Context, id int, r image.ProcessingResult) error {
+	if err := a.dbRepo.CompleteProcessing(ctx, id, database.ProcessingResult{
+		ThumbnailPath: r.ThumbnailPath, Width: r.Width, Height: r.Height,
+		Metadata: database.Metadata{"format": r.Format, "color_space": r.ColorSpace, "has_alpha": r.HasAlpha},
+	}); err != nil {
+		return err
+	}
+	a.invalidateCaches(ctx, id)
 	return nil
 }
 
@@ -226,6 +290,25 @@ func (a *ImageRepositoryAdapter) ExistsByFilename(ctx context.Context, filename 
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *ImageRepositoryAdapter) GetStats(ctx context.Context) (*image.ImageStats, error) {
+	dbStats, err := a.dbRepo.GetStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image stats: %w", err)
+	}
+
+	contentTypeCounts, err := a.dbRepo.GetContentTypeCounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get content type counts: %w", err)
+	}
+
+	return &image.ImageStats{
+		TotalImages:  int64(dbStats.TotalImages),
+		TotalSize:    dbStats.TotalSize,
+		AverageSize:  int64(dbStats.AverageSize),
+		ContentTypes: contentTypeCounts,
+	}, nil
 }
 
 func (a *ImageRepositoryAdapter) CountByTag(ctx context.Context, tagName string) (int, error) {
@@ -255,6 +338,9 @@ func (a *ImageRepositoryAdapter) convertToBaseImage(dbImg *database.Image) *imag
 		FileSize:         dbImg.FileSize,
 		StoragePath:      dbImg.StoragePath,
 		ThumbnailPath:    dbImg.ThumbnailPath,
+		Status:           dbImg.Status,
+		ProcessingError:  dbImg.ProcessingError,
+		ProcessedAt:      dbImg.ProcessedAt,
 		Width:            dbImg.Width,
 		Height:           dbImg.Height,
 		UploadedAt:       dbImg.UploadedAt,

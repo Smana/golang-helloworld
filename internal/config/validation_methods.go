@@ -13,6 +13,17 @@ import (
 // Constants for repeated string literals
 const (
 	minioadminCredential = "minioadmin"
+	storageProviderGCS   = "gcs"
+	envProduction        = "production"
+	envTest              = "test"
+
+	fieldPort         = "port"
+	fieldDatabaseURL  = "database_url"
+	fieldBucketName   = "storage.bucket_name"
+	fieldReadTimeout  = "server.read_timeout"
+	fieldWriteTimeout = "server.write_timeout"
+
+	msgMinioadminInProduction = "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)"
 )
 
 // ValidationError represents a configuration validation error
@@ -93,20 +104,20 @@ func (c *Config) validateServer() ValidationErrors {
 	// Validate port
 	if c.Port == "" {
 		errors = append(errors, ValidationError{
-			Field:   "port",
+			Field:   fieldPort,
 			Value:   c.Port,
 			Message: "port cannot be empty",
 		})
 	} else {
 		if port, err := strconv.Atoi(c.Port); err != nil {
 			errors = append(errors, ValidationError{
-				Field:   "port",
+				Field:   fieldPort,
 				Value:   c.Port,
 				Message: "port must be a valid integer",
 			})
 		} else if port < 1 || port > 65535 {
 			errors = append(errors, ValidationError{
-				Field:   "port",
+				Field:   fieldPort,
 				Value:   c.Port,
 				Message: "port must be between 1 and 65535",
 			})
@@ -115,7 +126,7 @@ func (c *Config) validateServer() ValidationErrors {
 
 	// Validate environment
 	if c.Environment != "" {
-		validEnvs := []string{"development", "production", "test", "staging"}
+		validEnvs := []string{"development", envProduction, envTest, "staging"}
 		isValid := false
 		for _, validEnv := range validEnvs {
 			if c.Environment == validEnv {
@@ -140,9 +151,9 @@ func (c *Config) validateDatabase() ValidationErrors {
 	var errors ValidationErrors
 
 	// Database URL is required for non-test environments
-	if c.Environment != "test" && c.DatabaseURL == "" {
+	if c.Environment != envTest && c.DatabaseURL == "" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL is required for non-test environments",
 		})
@@ -158,7 +169,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 	parsedURL, err := url.Parse(c.DatabaseURL)
 	if err != nil {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must be a valid URL",
 		})
@@ -168,7 +179,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 	// Check for required components
 	if parsedURL.Scheme != "postgres" && parsedURL.Scheme != "postgresql" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   parsedURL.Scheme,
 			Message: "database URL must use postgres or postgresql scheme",
 		})
@@ -176,7 +187,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 
 	if parsedURL.Host == "" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must include host",
 		})
@@ -184,7 +195,7 @@ func (c *Config) validateDatabase() ValidationErrors {
 
 	if parsedURL.Path == "" || parsedURL.Path == "/" {
 		errors = append(errors, ValidationError{
-			Field:   "database_url",
+			Field:   fieldDatabaseURL,
 			Value:   c.DatabaseURL,
 			Message: "database URL must include database name",
 		})
@@ -196,8 +207,20 @@ func (c *Config) validateDatabase() ValidationErrors {
 func (c *Config) validateStorage() ValidationErrors {
 	var errors ValidationErrors
 
-	// Validate endpoint
-	if c.Storage.Endpoint == "" {
+	// Validate provider
+	switch c.Storage.Provider {
+	case "", "s3", storageProviderGCS:
+		// valid
+	default:
+		errors = append(errors, ValidationError{
+			Field:   "storage.provider",
+			Value:   c.Storage.Provider,
+			Message: fmt.Sprintf("STORAGE_PROVIDER must be \"s3\" or \"gcs\" (got %q)", c.Storage.Provider),
+		})
+	}
+
+	// Validate endpoint - not required for gcs, which uses Application Default Credentials
+	if c.Storage.Provider != storageProviderGCS && c.Storage.Endpoint == "" {
 		errors = append(errors, ValidationError{
 			Field:   "storage.endpoint",
 			Value:   c.Storage.Endpoint,
@@ -205,30 +228,41 @@ func (c *Config) validateStorage() ValidationErrors {
 		})
 	}
 
-	// Validate bucket name
+	// Validate bucket name: required for both providers, each with its own naming rules.
 	if c.Storage.BucketName == "" {
 		errors = append(errors, ValidationError{
-			Field:   "storage.bucket_name",
+			Field:   fieldBucketName,
 			Value:   c.Storage.BucketName,
 			Message: "storage bucket name cannot be empty",
 		})
-	} else if !isValidBucketName(c.Storage.BucketName) {
+	} else if msg := bucketNameError(c.Storage.Provider, c.Storage.BucketName); msg != "" {
 		errors = append(errors, ValidationError{
-			Field:   "storage.bucket_name",
+			Field:   fieldBucketName,
 			Value:   c.Storage.BucketName,
-			Message: "storage bucket name must be 3-63 characters, lowercase alphanumeric and hyphens only",
+			Message: msg,
 		})
 	}
 
+	errors = append(errors, c.validateStorageCredentialsAndLimits()...)
+
+	return errors
+}
+
+// validateStorageCredentialsAndLimits validates the production-credentials
+// guard and the configured upload size cap. Split out of validateStorage to
+// keep both functions' cyclomatic complexity under the gocyclo threshold.
+func (c *Config) validateStorageCredentialsAndLimits() ValidationErrors {
+	var errors ValidationErrors
+
 	// Validate access credentials for production environments
 	// Allow empty credentials for EKS Pod Identity / IAM roles
-	if c.Environment == "production" {
+	if c.Environment == envProduction {
 		// Only warn about minioadmin credentials, allow empty for IAM roles
 		if c.Storage.AccessKeyID == minioadminCredential {
 			errors = append(errors, ValidationError{
 				Field:   "storage.access_key_id",
 				Value:   c.Storage.AccessKeyID,
-				Message: "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)",
+				Message: msgMinioadminInProduction,
 			})
 		}
 
@@ -236,7 +270,7 @@ func (c *Config) validateStorage() ValidationErrors {
 			errors = append(errors, ValidationError{
 				Field:   "storage.secret_access_key",
 				Value:   "[REDACTED]",
-				Message: "minioadmin credentials should not be used in production (use IAM roles or proper AWS credentials)",
+				Message: msgMinioadminInProduction,
 			})
 		}
 	}
@@ -304,13 +338,13 @@ func (c *Config) validateServerTimeouts() ValidationErrors {
 	// Validate read timeout
 	if c.Server.ReadTimeout <= 0 {
 		errors = append(errors, ValidationError{
-			Field:   "server.read_timeout",
+			Field:   fieldReadTimeout,
 			Value:   c.Server.ReadTimeout,
 			Message: "read timeout must be greater than 0",
 		})
 	} else if c.Server.ReadTimeout > 5*time.Minute {
 		errors = append(errors, ValidationError{
-			Field:   "server.read_timeout",
+			Field:   fieldReadTimeout,
 			Value:   c.Server.ReadTimeout,
 			Message: "read timeout should not exceed 5 minutes",
 		})
@@ -319,13 +353,13 @@ func (c *Config) validateServerTimeouts() ValidationErrors {
 	// Validate write timeout
 	if c.Server.WriteTimeout <= 0 {
 		errors = append(errors, ValidationError{
-			Field:   "server.write_timeout",
+			Field:   fieldWriteTimeout,
 			Value:   c.Server.WriteTimeout,
 			Message: "write timeout must be greater than 0",
 		})
 	} else if c.Server.WriteTimeout > 5*time.Minute {
 		errors = append(errors, ValidationError{
-			Field:   "server.write_timeout",
+			Field:   fieldWriteTimeout,
 			Value:   c.Server.WriteTimeout,
 			Message: "write timeout should not exceed 5 minutes",
 		})
@@ -364,15 +398,18 @@ func hasValidBucketBoundaries(name string) bool {
 	return isLowerAlphaNum(name[0]) && isLowerAlphaNum(name[len(name)-1])
 }
 
-// hasValidBucketCharacters validates all characters in bucket name
+// hasValidBucketCharacters validates all characters in bucket name. It walks
+// bytes, not runes: every byte of a multi-byte rune is >= 0x80 and so rejected,
+// where truncating the rune to a byte could turn it into a valid letter.
 func hasValidBucketCharacters(name string) bool {
-	for i, r := range name {
-		if !isLowerAlphaNum(byte(r)) && r != '-' {
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		if !isLowerAlphaNum(b) && b != '-' {
 			return false
 		}
 
 		// No consecutive hyphens
-		if i > 0 && r == '-' && name[i-1] == '-' {
+		if i > 0 && b == '-' && name[i-1] == '-' {
 			return false
 		}
 	}
@@ -392,6 +429,57 @@ func isIPAddressFormat(name string) bool {
 		}
 	}
 	return true
+}
+
+// isValidGCSBucketName validates Cloud Storage bucket naming rules
+// (https://cloud.google.com/storage/docs/buckets#naming).
+func isValidGCSBucketName(name string) bool {
+	return isValidGCSBucketLength(name) &&
+		hasValidBucketBoundaries(name) &&
+		hasValidGCSBucketCharacters(name) &&
+		!isIPAddressFormat(name) &&
+		!strings.HasPrefix(name, "goog") && !strings.Contains(name, "google")
+}
+
+// isValidGCSBucketLength allows 3-63 characters, or up to 222 when the name has
+// dots and no dot-separated part is longer than 63.
+func isValidGCSBucketLength(name string) bool {
+	if !strings.Contains(name, ".") {
+		return isValidBucketLength(name)
+	}
+	for _, part := range strings.Split(name, ".") {
+		if len(part) > 63 {
+			return false
+		}
+	}
+	return len(name) >= 3 && len(name) <= 222
+}
+
+// hasValidGCSBucketCharacters allows lowercase alphanumerics, hyphens,
+// underscores and dots, walking bytes so no multi-byte rune gets through.
+func hasValidGCSBucketCharacters(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if b := name[i]; !isLowerAlphaNum(b) && b != '-' && b != '_' && b != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// bucketNameError says why name is not a valid bucket name for provider, or
+// returns "" when it is.
+func bucketNameError(provider, name string) string {
+	if provider == storageProviderGCS {
+		if !isValidGCSBucketName(name) {
+			return `GCS bucket name must be 3-63 characters (222 with dots): lowercase alphanumeric, ` +
+				`hyphens, underscores and dots, not starting with "goog" nor containing "google"`
+		}
+		return ""
+	}
+	if !isValidBucketName(name) {
+		return "storage bucket name must be 3-63 characters, lowercase alphanumeric and hyphens only"
+	}
+	return ""
 }
 
 func isLowerAlphaNum(b byte) bool {

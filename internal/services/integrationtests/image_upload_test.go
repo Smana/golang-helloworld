@@ -53,7 +53,7 @@ func (s *ImageUploadTestSuite) SetupSuite() {
 	// Create services container with test database
 	container, err := services.NewContainerForTest(&services.TestConfig{
 		DatabaseURL: testSuite.Containers.GetDatabaseURL(),
-	}, testSuite.Containers.DB, testSuite.Containers.MinioClient)
+	}, testSuite.Containers.DB, testSuite.Containers.ObjectStore)
 	require.NoError(s.T(), err, "Failed to create services container")
 	s.container = container
 	s.imageService = container.ImageService()
@@ -215,7 +215,7 @@ func (s *ImageUploadTestSuite) TestImageUpload_RetrieveContent() {
 // TestImageUpload_DimensionExtraction tests using ImageProcessor
 func (s *ImageUploadTestSuite) TestImageUpload_DimensionExtraction() {
 	// Given: A valid PNG image
-	imageData := testutils.GenerateTestImageData(100, 100)
+	imageData := testutils.GenerateTestImageData(100, 100, "image/png")
 
 	// When: Extracting image info
 	imageInfo, err := s.container.ImageProcessor().GetImageInfo(s.ctx, strings.NewReader(string(imageData)))

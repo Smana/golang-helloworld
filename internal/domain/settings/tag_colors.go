@@ -5,36 +5,53 @@ import (
 	"hash/fnv"
 )
 
+// TailwindCSS 500-weight colors, each used in the palette and in both class maps.
+const (
+	colorBlue   = "#3B82F6"
+	colorGreen  = "#10B981"
+	colorAmber  = "#F59E0B"
+	colorRed    = "#EF4444"
+	colorViolet = "#8B5CF6"
+	colorPink   = "#EC4899"
+	colorCyan   = "#06B6D4"
+	colorOrange = "#F97316"
+	colorTeal   = "#14B8A6"
+	colorPurple = "#A855F7"
+	colorIndigo = "#6366F1"
+
+	blueTagClass = "bg-blue-500 text-white"
+)
+
 // TagColorPalette is a curated set of accessible, distinguishable colors
 // chosen from TailwindCSS color palette with WCAG AA contrast compliance
 var TagColorPalette = []string{
-	"#3B82F6", // blue-500
-	"#10B981", // green-500
-	"#F59E0B", // amber-500
-	"#EF4444", // red-500
-	"#8B5CF6", // violet-500
-	"#EC4899", // pink-500
-	"#06B6D4", // cyan-500
-	"#F97316", // orange-500
-	"#14B8A6", // teal-500
-	"#A855F7", // purple-500
-	"#6366F1", // indigo-500
-	"#10B981", // emerald-500
+	colorBlue,
+	colorGreen,
+	colorAmber,
+	colorRed,
+	colorViolet,
+	colorPink,
+	colorCyan,
+	colorOrange,
+	colorTeal,
+	colorPurple,
+	colorIndigo,
+	colorGreen, // emerald-500, the same hex as green-500
 }
 
 // TagColorPaletteClasses maps hex colors to TailwindCSS background classes
 var TagColorPaletteClasses = map[string]string{
-	"#3B82F6": "bg-blue-500 text-white",
-	"#10B981": "bg-green-500 text-white",
-	"#F59E0B": "bg-amber-500 text-white",
-	"#EF4444": "bg-red-500 text-white",
-	"#8B5CF6": "bg-violet-500 text-white",
-	"#EC4899": "bg-pink-500 text-white",
-	"#06B6D4": "bg-cyan-500 text-white",
-	"#F97316": "bg-orange-500 text-white",
-	"#14B8A6": "bg-teal-500 text-white",
-	"#A855F7": "bg-purple-500 text-white",
-	"#6366F1": "bg-indigo-500 text-white",
+	colorBlue:   blueTagClass,
+	colorGreen:  "bg-green-500 text-white",
+	colorAmber:  "bg-amber-500 text-white",
+	colorRed:    "bg-red-500 text-white",
+	colorViolet: "bg-violet-500 text-white",
+	colorPink:   "bg-pink-500 text-white",
+	colorCyan:   "bg-cyan-500 text-white",
+	colorOrange: "bg-orange-500 text-white",
+	colorTeal:   "bg-teal-500 text-white",
+	colorPurple: "bg-purple-500 text-white",
+	colorIndigo: "bg-indigo-500 text-white",
 }
 
 // GetTagColor returns a consistent color for a given tag name using FNV-1a hashing
@@ -61,7 +78,7 @@ func GetTagColorClass(tagName string) string {
 		return class
 	}
 	// Fallback to blue if color not in class map
-	return "bg-blue-500 text-white"
+	return blueTagClass
 }
 
 // GetTagStyle returns inline style with background color for a tag
@@ -74,17 +91,17 @@ func GetTagStyle(tagName string) string {
 // GetLightTagColorClass returns a lighter version of the tag color for non-selected states
 // Uses Tailwind's 100-weight colors for backgrounds with darker text
 var LightTagColorClasses = map[string]string{
-	"#3B82F6": "bg-blue-100 text-blue-800",
-	"#10B981": "bg-green-100 text-green-800",
-	"#F59E0B": "bg-amber-100 text-amber-800",
-	"#EF4444": "bg-red-100 text-red-800",
-	"#8B5CF6": "bg-violet-100 text-violet-800",
-	"#EC4899": "bg-pink-100 text-pink-800",
-	"#06B6D4": "bg-cyan-100 text-cyan-800",
-	"#F97316": "bg-orange-100 text-orange-800",
-	"#14B8A6": "bg-teal-100 text-teal-800",
-	"#A855F7": "bg-purple-100 text-purple-800",
-	"#6366F1": "bg-indigo-100 text-indigo-800",
+	colorBlue:   "bg-blue-100 text-blue-800",
+	colorGreen:  "bg-green-100 text-green-800",
+	colorAmber:  "bg-amber-100 text-amber-800",
+	colorRed:    "bg-red-100 text-red-800",
+	colorViolet: "bg-violet-100 text-violet-800",
+	colorPink:   "bg-pink-100 text-pink-800",
+	colorCyan:   "bg-cyan-100 text-cyan-800",
+	colorOrange: "bg-orange-100 text-orange-800",
+	colorTeal:   "bg-teal-100 text-teal-800",
+	colorPurple: "bg-purple-100 text-purple-800",
+	colorIndigo: "bg-indigo-100 text-indigo-800",
 }
 
 // GetLightTagColorClass returns light background classes for tag display

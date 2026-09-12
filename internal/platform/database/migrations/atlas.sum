@@ -1,4 +1,5 @@
-h1:Fw/ehoEga5KFdWsVpYeIaULQYmPzvTuQ+/eToi47s/U=
+h1:0EsK8sdF25jzDPPIf8LHJBHfe7qWYHFPnfdecMM0/Po=
 001_initial_schema.sql h1:RhQxcM722l3PJ82ZAFPBBSIOuG5L2PFeVULGfhCzPeI=
 002_add_user_settings.sql h1:7MIYl/0IAZayoJXw5zL0anFLOmM/4Ry0OsTSlxIjgUU=
 003_predefined_tags.sql h1:nQL89az5Qt3UgCZbLnHlg59+tZ/g/s+uVAeIpsTgdXI=
+004_async_processing_and_demo.sql h1:C/fKMb8nJPg3N0pZB0efj8Xi+lCgzaFJ2SP6GkBIQAA=

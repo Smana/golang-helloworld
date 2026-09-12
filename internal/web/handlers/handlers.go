@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"io"
 	"net/http"
@@ -11,8 +10,8 @@ import (
 
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
+	"image-gallery/internal/faults"
 	"image-gallery/internal/observability"
-	"image-gallery/internal/platform/storage"
 	"image-gallery/internal/services"
 
 	"github.com/go-chi/chi/v5"
@@ -22,9 +21,8 @@ import (
 
 type Handler struct {
 	// Legacy fields for backward compatibility
-	db      *sql.DB
-	storage *storage.MinIOClient
-	config  *config.Config
+	db     *sql.DB
+	config *config.Config
 
 	// New service-based dependencies
 	container      *services.Container
@@ -32,19 +30,14 @@ type Handler struct {
 	tagService     image.TagService
 	storageService image.StorageService
 
+	// Demo controls (fault injection)
+	demo         *faults.Service
+	demoInjector *faults.Injector
+
 	// Observability
 	tracer      trace.Tracer
 	httpMetrics *observability.HTTPMetrics
 	logger      *observability.Logger
-}
-
-// New creates a handler with legacy dependencies (for backward compatibility)
-func New(db *sql.DB, storage *storage.MinIOClient, config *config.Config) *Handler {
-	return &Handler{
-		db:      db,
-		storage: storage,
-		config:  config,
-	}
 }
 
 // NewWithContainer creates a handler with the dependency injection container
@@ -61,15 +54,18 @@ func NewWithContainer(container *services.Container) *Handler {
 
 	return &Handler{
 		// Legacy fields for backward compatibility
-		db:      container.DB(),
-		storage: container.StorageClient(),
-		config:  container.Config(),
+		db:     container.DB(),
+		config: container.Config(),
 
 		// New service-based dependencies
 		container:      container,
 		imageService:   container.ImageService(),
 		tagService:     container.TagService(),
 		storageService: container.StorageService(),
+
+		// Demo controls (fault injection)
+		demo:         container.DemoService(),
+		demoInjector: container.DemoInjector(),
 
 		// Observability
 		tracer:      tracer,
@@ -81,14 +77,11 @@ func NewWithContainer(container *services.Container) *Handler {
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 
-	// Add OpenTelemetry tracing middleware first (for all requests)
-	if h.tracer != nil {
-		r.Use(observability.TracingMiddleware(h.tracer))
-	}
+	// One middleware: trace continuation, route-pattern span names, semconv RED metrics.
+	r.Use(observability.Middleware(h.tracer, h.httpMetrics))
 
-	// Add OpenTelemetry metrics middleware
-	if h.httpMetrics != nil {
-		r.Use(observability.MetricsMiddleware(h.httpMetrics))
+	if h.demoInjector != nil {
+		r.Use(h.demoInjector.Middleware) // inside the server span, so faults are recorded on it
 	}
 
 	// Standard Chi middleware
@@ -111,16 +104,22 @@ func (h *Handler) Routes() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/images", func(r chi.Router) {
 			r.Get("/", h.listImagesHandler)
-			r.Post("/", h.uploadImagesHandler) // Upload images endpoint
-			r.Get("/{id}", h.getImageHandler)
-			r.Get("/{id}/view", h.viewImageHandler) // Proxy endpoint for viewing images
-			r.Delete("/{id}", h.deleteImageHandler) // Delete image endpoint
+			r.Post("/", h.uploadImagesHandler)                // Upload images endpoint
+			r.Get("/{id}/view", h.viewImageHandler)           // Proxy endpoint for viewing images
+			r.Get("/{id}/thumbnail", h.thumbnailImageHandler) // Thumbnail, or the original until the worker is done
+			r.Delete("/{id}", h.deleteImageHandler)           // Delete image endpoint
 		})
 		// Settings endpoints
 		r.Route("/settings", func(r chi.Router) {
 			r.Get("/", h.getSettingsHandler)         // Get user settings
 			r.Put("/", h.updateSettingsHandler)      // Update user settings
 			r.Post("/reset", h.resetSettingsHandler) // Reset to defaults
+			// Demo controls: h.demo is nil when DEMO_CONTROLS_ENABLED=false
+			if h.demo != nil {
+				r.Get("/demo", h.getDemoHandler)
+				r.Put("/demo", h.updateDemoHandler)
+				r.Post("/demo/reset", h.resetDemoHandler)
+			}
 		})
 		// Tags endpoints
 		r.Route("/tags", func(r chi.Router) {
@@ -143,7 +142,7 @@ func (h *Handler) indexHandler(w http.ResponseWriter, r *http.Request) {
 //
 //nolint:gocyclo // Handler with error handling and content type detection
 func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 	imageIDStr := chi.URLParam(r, "id")
 
 	// Parse image ID
@@ -180,14 +179,14 @@ func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
 		// Fallback content type based on extension
 		ext := strings.ToLower(filepath.Ext(img.StoragePath))
 		switch ext {
-		case ".jpg", ".jpeg":
-			w.Header().Set("Content-Type", "image/jpeg")
-		case ".png":
-			w.Header().Set("Content-Type", "image/png")
-		case ".gif":
-			w.Header().Set("Content-Type", "image/gif")
-		case ".webp":
-			w.Header().Set("Content-Type", "image/webp")
+		case extJPG, extJPEG:
+			w.Header().Set("Content-Type", contentTypeJPEG)
+		case extPNG:
+			w.Header().Set("Content-Type", contentTypePNG)
+		case extGIF:
+			w.Header().Set("Content-Type", contentTypeGIF)
+		case extWebP:
+			w.Header().Set("Content-Type", contentTypeWebP)
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
@@ -200,6 +199,63 @@ func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, reader); err != nil {
 		http.Error(w, "Failed to serve image", http.StatusInternalServerError)
 		return
+	}
+}
+
+// thumbnailImageHandler serves the worker's thumbnail, or the original while
+// the image is pending, processing or failed.
+func (h *Handler) thumbnailImageHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid image id", http.StatusBadRequest)
+		return
+	}
+	img, err := h.imageService.GetImage(r.Context(), id)
+	if err != nil {
+		http.Error(w, "image not found", http.StatusNotFound)
+		return
+	}
+	path, contentType := img.StoragePath, img.ContentType
+	if img.ThumbnailPath != nil && *img.ThumbnailPath != "" {
+		path, contentType = *img.ThumbnailPath, thumbnailContentType(*img.ThumbnailPath)
+	}
+	rc, err := h.storageService.Retrieve(r.Context(), path)
+	if err != nil {
+		http.Error(w, "image unavailable", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = rc.Close() }() //nolint:errcheck // Resource cleanup
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = io.Copy(w, rc) //nolint:errcheck // response already committed; nothing actionable on copy failure
+}
+
+// Content types thumbnailContentType can return, kept as constants so adding
+// this lookup does not push shared MIME-type literals over goconst's threshold.
+const (
+	contentTypePNG  = "image/png"
+	contentTypeGIF  = "image/gif"
+	contentTypeJPEG = "image/jpeg"
+)
+
+// File extensions matched both here and in viewImageHandler's fallback
+// content-type switch above, kept as constants for the same goconst reason.
+const (
+	extJPG  = ".jpg"
+	extJPEG = ".jpeg"
+	extPNG  = ".png"
+	extGIF  = ".gif"
+	extWebP = ".webp"
+)
+
+func thumbnailContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case extPNG:
+		return contentTypePNG
+	case extGIF:
+		return contentTypeGIF
+	default:
+		return contentTypeJPEG
 	}
 }
 
@@ -414,6 +470,24 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
                             Save Settings
                         </button>
                     </div>
+
+                    <fieldset id="demoControls" class="border border-amber-300 rounded-lg p-4 mt-6">
+                        <legend class="px-2 text-sm font-semibold text-amber-700">Demo controls (fault injection)</legend>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            <label>Latency (ms)<input id="demoLatencyMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
+                            <label>Latency probability<input id="demoLatencyProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label class="col-span-2">Latency routes (comma-separated path prefixes, empty = all /api)<input id="demoLatencyRoutes" type="text" class="w-full border rounded px-2 py-1"></label>
+                            <label>Error probability (5xx)<input id="demoErrorProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label>Slow DB list query (ms)<input id="demoSlowDbMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
+                            <label>Worker failure probability<input id="demoWorkerFailProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label>Worker delay (ms)<input id="demoWorkerDelayMs" type="number" min="0" max="10000" class="w-full border rounded px-2 py-1"></label>
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                            <button onclick="saveDemoControls()" class="bg-amber-600 hover:bg-amber-700 text-white py-1 px-3 rounded">Apply</button>
+                            <button onclick="resetDemoControls()" class="bg-gray-500 hover:bg-gray-600 text-white py-1 px-3 rounded">All off</button>
+                            <span id="demoStatus" class="text-xs text-gray-500 self-center"></span>
+                        </div>
+                    </fieldset>
                 </div>
             </div>
         </div>
@@ -624,7 +698,35 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         function openSettingsModal() {
+            loadDemoControls();
             document.getElementById('settingsModal').classList.add('active');
+        }
+
+        const demoFields = {
+            latency_ms: ['demoLatencyMs', Number], latency_probability: ['demoLatencyProb', Number],
+            error_probability: ['demoErrorProb', Number], slow_db_ms: ['demoSlowDbMs', Number],
+            worker_failure_probability: ['demoWorkerFailProb', Number], worker_delay_ms: ['demoWorkerDelayMs', Number],
+        };
+        function fillDemoControls(c) {
+            for (const [key, [id]] of Object.entries(demoFields)) document.getElementById(id).value = c[key] ?? 0;
+            document.getElementById('demoLatencyRoutes').value = (c.latency_routes || []).join(', ');
+        }
+        async function loadDemoControls() {
+            const r = await fetch('/api/settings/demo');
+            if (r.ok) fillDemoControls(await r.json());
+            else if (r.status === 404) document.getElementById('demoControls').hidden = true; // DEMO_CONTROLS_ENABLED=false
+        }
+        async function saveDemoControls() {
+            const body = { latency_routes: document.getElementById('demoLatencyRoutes').value.split(',').map(s => s.trim()).filter(Boolean) };
+            for (const [key, [id, cast]] of Object.entries(demoFields)) body[key] = cast(document.getElementById(id).value || 0);
+            const r = await fetch('/api/settings/demo', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            document.getElementById('demoStatus').textContent = r.ok ? 'Applied' : 'Rejected: ' + await r.text();
+            if (r.ok) fillDemoControls(await r.json());
+        }
+        async function resetDemoControls() {
+            const r = await fetch('/api/settings/demo/reset', { method: 'POST' });
+            document.getElementById('demoStatus').textContent = r.ok ? 'All off' : 'Reset failed';
+            if (r.ok) fillDemoControls(await r.json());
         }
 
         function closeSettingsModal() {
