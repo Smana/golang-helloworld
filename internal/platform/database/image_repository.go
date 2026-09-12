@@ -125,7 +125,12 @@ func (r *imageRepository) GetByStoragePath(ctx context.Context, path string) (*I
 	return r.scanSingleImage(ctx, query, fmt.Sprintf("image with storage path %s not found", path), path)
 }
 
-// Update updates an existing image record
+// Update updates an existing image record.
+//
+// This is the generic metadata path (e.g. PUT /api/images/:id) and is deliberately not a place to
+// persist status/processing_error/processed_at: callers here routinely pass an Image with a zero
+// Status, which would violate the images_status_check constraint. The processing-status fields
+// have dedicated writers by design — UpdateStatus and CompleteProcessing — use those instead.
 func (r *imageRepository) Update(ctx context.Context, image *Image) error {
 	query := `
 		UPDATE images SET
@@ -188,9 +193,16 @@ func (r *imageRepository) UpdateStatus(ctx context.Context, id int, status strin
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // driver never errors after a successful Exec
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
 		return fmt.Errorf("image with ID %d not found", id)
 	}
+
 	return nil
 }
 
@@ -205,9 +217,16 @@ func (r *imageRepository) CompleteProcessing(ctx context.Context, id int, p Proc
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // driver never errors after a successful Exec
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
 		return fmt.Errorf("image with ID %d not found", id)
 	}
+
 	return nil
 }
 

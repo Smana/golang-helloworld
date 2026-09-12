@@ -193,12 +193,15 @@ func (a *ImageRepositoryAdapter) Update(ctx context.Context, img *image.Image) e
 		FileSize:         img.FileSize,
 		StoragePath:      img.StoragePath,
 		ThumbnailPath:    img.ThumbnailPath,
-		Status:           img.Status,
-		ProcessingError:  img.ProcessingError,
-		ProcessedAt:      img.ProcessedAt,
-		Width:            img.Width,
-		Height:           img.Height,
-		Metadata:         database.Metadata{},
+		// Status/ProcessingError/ProcessedAt are mapped for symmetry with the other conversion
+		// sites, but dbRepo.Update's SET clause does not persist them by design: this is the
+		// generic metadata path, and the dedicated writers are UpdateStatus/CompleteProcessing.
+		Status:          img.Status,
+		ProcessingError: img.ProcessingError,
+		ProcessedAt:     img.ProcessedAt,
+		Width:           img.Width,
+		Height:          img.Height,
+		Metadata:        database.Metadata{},
 	}
 
 	// Convert domain metadata to database metadata if present

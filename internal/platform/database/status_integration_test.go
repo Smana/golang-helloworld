@@ -53,4 +53,16 @@ func TestImageProcessingStatusRoundTrip(t *testing.T) {
 	if err := tc.DB.QueryRowContext(ctx, "SELECT count(*) FROM demo_controls").Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("demo_controls rows = %d err %v", rows, err)
 	}
+
+	errMsg := "thumbnail generation failed: unsupported color profile"
+	if err := repo.UpdateStatus(ctx, img.ID, "failed", &errMsg); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.GetByID(ctx, img.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "failed" || got.ProcessingError == nil || *got.ProcessingError != errMsg {
+		t.Fatalf("after failed UpdateStatus: %+v", got)
+	}
 }
