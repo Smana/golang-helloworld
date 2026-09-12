@@ -74,7 +74,7 @@ jobs:
           DOCKER_BUILDKIT: 1
 
       - name: Run Trivy vulnerability scanner on built image (AMD64)
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'ghcr.io/smana/image-gallery:${{ needs.release-please.outputs.version }}-amd64'
           format: 'sarif'
@@ -83,7 +83,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Run Trivy vulnerability scanner on built image (ARM64)
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'ghcr.io/smana/image-gallery:${{ needs.release-please.outputs.version }}-arm64'
           format: 'sarif'
