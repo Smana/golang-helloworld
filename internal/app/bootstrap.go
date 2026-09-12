@@ -25,7 +25,7 @@ type Deps struct {
 	OTel   *observability.Provider
 	DB     *sql.DB
 	Store  storage.ObjectStore
-	Redis  *redis.Client // instrumented; nil when CACHE_ADDRESS is empty
+	Redis  *redis.Client // instrumented; nil when caching is disabled or Valkey is unreachable
 }
 
 // Bootstrap loads configuration and connects telemetry, Postgres, object
@@ -60,10 +60,16 @@ func Bootstrap(ctx context.Context, defaultService string) (*Deps, error) {
 		d.Close(ctx)
 		return nil, fmt.Errorf("object storage (%s): %w", cfg.Storage.Provider, err)
 	}
-	if cfg.Cache.Address != "" {
+	// Valkey is best-effort: gate on Enabled (CACHE_ADDRESS always has a default,
+	// so testing it for "" would never actually gate anything). A missing or
+	// unreachable Valkey must not stop the web role from serving — uploads
+	// simply stay pending until a worker can pick them up (see wireJobPublisher
+	// in serve.go and the package doc in README: "gracefully degrades when
+	// Valkey is unavailable").
+	if cfg.Cache.Enabled {
 		if d.Redis, err = cache.NewInstrumentedClient(cfg.Cache); err != nil {
-			d.Close(ctx)
-			return nil, fmt.Errorf("valkey: %w", err)
+			d.Logger.GetZerolog().Warn().Err(err).Msg("Valkey connection failed; continuing without it")
+			d.Redis = nil
 		}
 	}
 	d.Logger.GetZerolog().Info().Str("storage.provider", d.Store.Provider()).Msg("bootstrap complete")

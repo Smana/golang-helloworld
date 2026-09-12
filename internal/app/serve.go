@@ -31,9 +31,7 @@ func RunServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("services: %w", err)
 	}
-	if err := wireJobPublisher(d, container); err != nil {
-		return err
-	}
+	wireJobPublisher(d, container, log)
 	if d.Cfg.Storage.SyncOnStartup {
 		if err := syncExistingImages(ctx, container, d.Logger); err != nil {
 			log.Error().Err(err).Msg("Failed to sync existing images, continuing startup")
@@ -45,18 +43,21 @@ func RunServe(ctx context.Context) error {
 }
 
 // wireJobPublisher attaches the Valkey-backed job publisher when a Redis
-// connection is configured. Without it, uploads stay pending for a worker
-// that can never pick them up (local/no-queue runs).
-func wireJobPublisher(d *Deps, container *services.Container) error {
+// connection is configured and reachable. Never fails the web role: without a
+// publisher, ImageServiceImpl.enqueueProcessing no-ops on upload (the image
+// stays "pending" for a worker to pick up later) instead of erroring, so a
+// missing or unreachable Valkey must not stop the server from serving.
+func wireJobPublisher(d *Deps, container *services.Container, log *zerolog.Logger) {
 	if d.Redis == nil {
-		return nil
+		log.Warn().Msg("Valkey not available; asynchronous image processing is disabled for this run")
+		return
 	}
 	producer, err := queue.NewProducer(d.Redis)
 	if err != nil {
-		return fmt.Errorf("job producer: %w", err)
+		log.Warn().Err(err).Msg("Failed to create job producer; asynchronous image processing is disabled for this run")
+		return
 	}
 	container.UseJobPublisher(implementations.NewQueueJobPublisher(producer))
-	return nil
 }
 
 // serveUntilShutdown runs srv until ctx is canceled or it fails, then drains

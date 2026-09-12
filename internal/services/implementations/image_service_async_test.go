@@ -91,6 +91,23 @@ func TestCreateImageIsPendingAndEnqueued(t *testing.T) {
 	}
 }
 
+// TestCreateImageStaysPendingWithoutJobPublisher pins the contract R29 relies
+// on: a web role bootstrapped with no Valkey (CACHE_ENABLED=false, or Valkey
+// simply unreachable) must still accept uploads. With no job publisher set,
+// enqueueProcessing no-ops and the image is left "pending" for a worker to
+// pick up later, instead of the request failing.
+func TestCreateImageStaysPendingWithoutJobPublisher(t *testing.T) {
+	repo := newFakeRepo()
+	data := tinyPNG(t)
+	img, err := newAsyncService(t, repo, nil).CreateImage(context.Background(), createReq(data), bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("upload with no job publisher configured should still succeed, got %v", err)
+	}
+	if img.Status != image.StatusPending || repo.byID[img.ID].Status != image.StatusPending {
+		t.Fatalf("status = %q (stored %q), want pending", img.Status, repo.byID[img.ID].Status)
+	}
+}
+
 func TestCreateImageMarksFailedWhenEnqueueFails(t *testing.T) {
 	repo, pub := newFakeRepo(), &fakePublisher{err: errors.New("valkey down")}
 	data := tinyPNG(t)
