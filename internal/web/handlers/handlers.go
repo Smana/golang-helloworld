@@ -11,6 +11,7 @@ import (
 
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
+	"image-gallery/internal/faults"
 	"image-gallery/internal/observability"
 	"image-gallery/internal/services"
 
@@ -29,6 +30,10 @@ type Handler struct {
 	imageService   image.ImageService
 	tagService     image.TagService
 	storageService image.StorageService
+
+	// Demo controls (fault injection)
+	demo         *faults.Service
+	demoInjector *faults.Injector
 
 	// Observability
 	tracer      trace.Tracer
@@ -59,6 +64,10 @@ func NewWithContainer(container *services.Container) *Handler {
 		tagService:     container.TagService(),
 		storageService: container.StorageService(),
 
+		// Demo controls (fault injection)
+		demo:         container.DemoService(),
+		demoInjector: container.DemoInjector(),
+
 		// Observability
 		tracer:      tracer,
 		httpMetrics: httpMetrics,
@@ -71,6 +80,10 @@ func (h *Handler) Routes() http.Handler {
 
 	// One middleware: trace continuation, route-pattern span names, semconv RED metrics.
 	r.Use(observability.Middleware(h.tracer, h.httpMetrics))
+
+	if h.demoInjector != nil {
+		r.Use(h.demoInjector.Middleware) // inside the server span, so faults are recorded on it
+	}
 
 	// Standard Chi middleware
 	r.Use(middleware.Recoverer)
@@ -103,6 +116,9 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/", h.getSettingsHandler)         // Get user settings
 			r.Put("/", h.updateSettingsHandler)      // Update user settings
 			r.Post("/reset", h.resetSettingsHandler) // Reset to defaults
+			r.Get("/demo", h.getDemoHandler)
+			r.Put("/demo", h.updateDemoHandler)
+			r.Post("/demo/reset", h.resetDemoHandler)
 		})
 		// Tags endpoints
 		r.Route("/tags", func(r chi.Router) {
@@ -443,6 +459,24 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
                             Save Settings
                         </button>
                     </div>
+
+                    <fieldset class="border border-amber-300 rounded-lg p-4 mt-6">
+                        <legend class="px-2 text-sm font-semibold text-amber-700">Demo controls (fault injection)</legend>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            <label>Latency (ms)<input id="demoLatencyMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
+                            <label>Latency probability<input id="demoLatencyProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label class="col-span-2">Latency routes (comma-separated path prefixes, empty = all /api)<input id="demoLatencyRoutes" type="text" class="w-full border rounded px-2 py-1"></label>
+                            <label>Error probability (5xx)<input id="demoErrorProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label>Slow DB list query (ms)<input id="demoSlowDbMs" type="number" min="0" max="30000" class="w-full border rounded px-2 py-1"></label>
+                            <label>Worker failure probability<input id="demoWorkerFailProb" type="number" min="0" max="1" step="0.05" class="w-full border rounded px-2 py-1"></label>
+                            <label>Worker delay (ms)<input id="demoWorkerDelayMs" type="number" min="0" max="60000" class="w-full border rounded px-2 py-1"></label>
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                            <button onclick="saveDemoControls()" class="bg-amber-600 hover:bg-amber-700 text-white py-1 px-3 rounded">Apply</button>
+                            <button onclick="resetDemoControls()" class="bg-gray-500 hover:bg-gray-600 text-white py-1 px-3 rounded">All off</button>
+                            <span id="demoStatus" class="text-xs text-gray-500 self-center"></span>
+                        </div>
+                    </fieldset>
                 </div>
             </div>
         </div>
@@ -653,7 +687,34 @@ func (h *Handler) galleryHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         function openSettingsModal() {
+            loadDemoControls();
             document.getElementById('settingsModal').classList.add('active');
+        }
+
+        const demoFields = {
+            latency_ms: ['demoLatencyMs', Number], latency_probability: ['demoLatencyProb', Number],
+            error_probability: ['demoErrorProb', Number], slow_db_ms: ['demoSlowDbMs', Number],
+            worker_failure_probability: ['demoWorkerFailProb', Number], worker_delay_ms: ['demoWorkerDelayMs', Number],
+        };
+        function fillDemoControls(c) {
+            for (const [key, [id]] of Object.entries(demoFields)) document.getElementById(id).value = c[key] ?? 0;
+            document.getElementById('demoLatencyRoutes').value = (c.latency_routes || []).join(', ');
+        }
+        async function loadDemoControls() {
+            const r = await fetch('/api/settings/demo');
+            if (r.ok) fillDemoControls(await r.json());
+        }
+        async function saveDemoControls() {
+            const body = { latency_routes: document.getElementById('demoLatencyRoutes').value.split(',').map(s => s.trim()).filter(Boolean) };
+            for (const [key, [id, cast]] of Object.entries(demoFields)) body[key] = cast(document.getElementById(id).value || 0);
+            const r = await fetch('/api/settings/demo', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            document.getElementById('demoStatus').textContent = r.ok ? 'Applied' : 'Rejected: ' + await r.text();
+            if (r.ok) fillDemoControls(await r.json());
+        }
+        async function resetDemoControls() {
+            const r = await fetch('/api/settings/demo/reset', { method: 'POST' });
+            document.getElementById('demoStatus').textContent = r.ok ? 'All off' : 'Reset failed';
+            if (r.ok) fillDemoControls(await r.json());
         }
 
         function closeSettingsModal() {

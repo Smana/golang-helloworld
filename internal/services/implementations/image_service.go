@@ -28,9 +28,10 @@ type ImageServiceImpl struct {
 	storage   image.StorageService
 	processor image.ImageProcessor
 	validator image.ValidationService
-	eventPub  image.EventPublisher // can be nil
-	cache     image.CacheService   // can be nil
-	jobs      image.JobPublisher   // can be nil
+	eventPub  image.EventPublisher      // can be nil
+	cache     image.CacheService        // can be nil
+	jobs      image.JobPublisher        // can be nil
+	slowDB    func(ctx context.Context) // demo "slow DB" hook, can be nil
 
 	// Observability
 	tracer       trace.Tracer
@@ -76,6 +77,9 @@ func NewImageService(
 
 // SetJobPublisher wires the asynchronous processing queue.
 func (s *ImageServiceImpl) SetJobPublisher(p image.JobPublisher) { s.jobs = p }
+
+// SetSlowDB installs the demo "slow DB" hook, called before each list query.
+func (s *ImageServiceImpl) SetSlowDB(f func(ctx context.Context)) { s.slowDB = f }
 
 // enqueueProcessing hands the image to the worker. The upload has already
 // succeeded, so an enqueue failure marks the image failed rather than failing the request.
@@ -319,6 +323,10 @@ func (s *ImageServiceImpl) GetImage(ctx context.Context, id int) (*image.Image, 
 
 // ListImages retrieves images based on criteria
 func (s *ImageServiceImpl) ListImages(ctx context.Context, req *image.ListImagesRequest) (*image.ListImagesResponse, error) {
+	if s.slowDB != nil {
+		s.slowDB(ctx)
+	}
+
 	// Generate cache key based on request parameters
 	cacheKey := generateListCacheKey(req)
 

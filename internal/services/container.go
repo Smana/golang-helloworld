@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"image-gallery/internal/config"
 	"image-gallery/internal/domain/image"
 	"image-gallery/internal/domain/settings"
+	"image-gallery/internal/faults"
 	"image-gallery/internal/observability"
 	"image-gallery/internal/platform/cache"
 	"image-gallery/internal/platform/database"
@@ -48,6 +50,10 @@ type Container struct {
 	searchService       image.SearchService
 	auditService        image.AuditService
 	notificationService image.NotificationService
+
+	// Demo controls (fault injection)
+	demoService  *faults.Service
+	demoInjector *faults.Injector
 
 	// Observability
 	logger *observability.Logger
@@ -169,6 +175,20 @@ func (c *Container) initializeServices() error {
 		c.redisClient,
 	)
 
+	var demoCache faults.Cache // a nil *RedisClient inside a non-nil interface would panic
+	if c.redisClient != nil {
+		demoCache = c.redisClient
+	}
+	c.demoService = faults.NewService(implementations.NewDemoRepository(c.db), demoCache)
+	c.demoInjector = faults.NewInjector(c.demoService, c.logger)
+	if s, ok := c.imageService.(interface{ SetSlowDB(func(context.Context)) }); ok {
+		s.SetSlowDB(func(ctx context.Context) {
+			if d := c.demoInjector.SlowDB(ctx); d > 0 {
+				_ = implementations.SleepInDB(ctx, c.db, d.Seconds()) //nolint:errcheck // best-effort demo delay; a failure here must not break the list query
+			}
+		})
+	}
+
 	log.Println("Dependency injection container initialized successfully")
 	return nil
 }
@@ -252,6 +272,16 @@ func (c *Container) UseJobPublisher(p image.JobPublisher) {
 
 func (c *Container) Logger() *observability.Logger {
 	return c.logger
+}
+
+// DemoService returns the demo-controls service (fault injection settings).
+func (c *Container) DemoService() *faults.Service {
+	return c.demoService
+}
+
+// DemoInjector returns the demo-controls fault injector.
+func (c *Container) DemoInjector() *faults.Injector {
+	return c.demoInjector
 }
 
 // Close cleans up resources

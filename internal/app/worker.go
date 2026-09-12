@@ -77,9 +77,8 @@ func RunWorker(ctx context.Context) error {
 	return runErr
 }
 
-// workerFaults wires the demo-controls fault injector; Task 14 implements
-// Faults and replaces this with a real injector derived from container.
-func workerFaults(*services.Container) worker.Faults { return nil }
+// workerFaults wires the demo-controls fault injector into the processor.
+func workerFaults(c *services.Container) worker.Faults { return c.DemoInjector() }
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
