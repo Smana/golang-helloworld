@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"io"
 	"net/http"
@@ -141,7 +140,7 @@ func (h *Handler) indexHandler(w http.ResponseWriter, r *http.Request) {
 //
 //nolint:gocyclo // Handler with error handling and content type detection
 func (h *Handler) viewImageHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 	imageIDStr := chi.URLParam(r, "id")
 
 	// Parse image ID
